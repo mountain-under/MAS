@@ -3,7 +3,7 @@ import statistics
 from mesa import Agent, Model
 from mesa.time import RandomActivation
 from mesa.datacollection import DataCollector
-import matplotlib.pyplot as plt
+import matplotlexitib.pyplot as plt
 
 class Worker:
     def __init__(self, production_capacity, firm):
