@@ -3,12 +3,12 @@ import statistics
 from mesa import Agent, Model
 from mesa.time import RandomActivation
 from mesa.datacollection import DataCollector
-import matplotlexitib.pyplot as plt
+import matplotlib.pyplot as plt
 
 class Worker:
     def __init__(self, production_capacity, firm):
         self.production_capacity = production_capacity  # 生産能力
-        self.firm = None  # 働く先の企業エージェント
+        self.firm = firm  # 働く先の企業エージェント
         self.employed = False  # 雇用状態
 
         
@@ -30,60 +30,26 @@ class HouseholdAgent(Agent):
         self.workers = [Worker(random.randint(1, 5), None) for _ in range(num_of_workers)]
         self.income = 0 #収入
         self.disposable_income = 0 #可処分所得
+        self.consumption = 0 #消費
         self.savings = 0 #貯蓄額
 
     #年金受給者が働く，労働者が年金受給者になるなどの操作は非常に煩雑なため，割愛．
-        """
-        # 年金受給者の生産能力は1で固定
-        self.productivity_of_retirees = [1 for _ in range(self.num_of_retirees)]
-
-        # 年金とベーシックインカムの合計が生活費を賄えない場合に働く年金受給者の数
-        self.working_retirees = 0
-        """
-
         
-
-    """
-    def work_or_retire(self):
-        
-        # 更新ルールを適用して、労働者と年金受給者の数を更新
-        # 一部の労働者が年金受給者に移行
-        if self.num_of_workers > 0 and random.random() < 0.1:  # 10%の確率で労働者が一人年金受給者になる
-            self.num_of_workers -= 1
-            self.num_of_retirees += 1
-            self.productivity_of_workers.pop()  # 最後の労働者の生産能力を削除
-            self.productivity_of_retirees.append(1)  # 新たな年金受給者の生産能力を追加
-        
-        # 一部の非労働者が労働者に移行
-        if self.num_of_non_workers > 0 and random.random() < 0.05:  # 5%の確率で非労働者が一人労働者になる
-            self.num_of_non_workers -= 1
-            self.num_of_workers += 1
-            self.productivity_of_workers.append(random.randint(1, 5))  # 新たな労働者の生産能力を追加
-        
-        # 一部の労働者が非労働者に移行
-        if self.num_of_workers > 0 and random.random() < 0.05:  # 5%の確率で非労働者が一人労働者になる
-            self.num_of_workers -= 1
-            self.num_of_non_workers += 1
-            self.productivity_of_workers.pop()  # 最後の労働者の生産能力を削除
-
-        
-        # 年金とベーシックインカムの合計が生活費を賄えない場合、年金受給者が働く
-        if self.num_of_retirees > 0 and self.savings < 50 :  
-            self.working_retirees += 1
-        if self.working_retirees > 0 and self.savings > 50 :
-            self.working_retirees -= 1
-        
-    """
 
     # 高賃金の企業を探す：賃金が現在の企業よりも高い企業を探し、その中からランダムに1つ選ぶ
     def find_higher_paying_job(self, worker):
-        higher_paying_jobs = [firm for firm in self.model.schedule.agents if isinstance(firm, FirmAgent) and firm.wage > worker.firm.wage]
+        higher_paying_jobs = [firm for firm in self.model.schedule.agents if isinstance(firm, FirmAgent) and firm.wage > worker.firm.wage and firm.job_openings > 0]
         if higher_paying_jobs:
             return random.choice(higher_paying_jobs)
         else:
             return None
     
-    import random
+    def find_job(self, worker):
+        jobs = [firm for firm in self.model.schedule.agents if isinstance(firm, FirmAgent)  and firm.job_openings > 0]
+        if jobs:
+            return random.choice(jobs)
+        else:
+            return None
 
     def should_consider_job_change(self, worker):
         # 自身の生産能力が3以上であれば、20%の確率で転職を考慮
@@ -108,6 +74,7 @@ class HouseholdAgent(Agent):
                     if new_firm is not None and new_firm != worker.firm:
                         worker.firm.fire(worker)  # 以前の雇用者から離職
                         worker.firm = new_firm  # 新しい雇用者に就職
+                        worker.employed = True  # 雇用状態を更新
 
             # 失業している労働者が仕事を探す
             else:
@@ -123,18 +90,20 @@ class HouseholdAgent(Agent):
     def calculate_income(self):
         # 働いている労働者からの賃金の合計
         income_from_wages = sum(worker.firm.wage for worker in self.workers if worker.firm is not None)
-        income_from_pensions = self.num_of_retirees * self.model.pension  # 年金受給者からの年金
-        income_from_child_allowance = self.num_of_non_workers * self.model.child_allowance  # 児童手当
-        income_from_unemployment_allowance = sum(1 for worker in self.workers if worker.firm is None)*self.model.unemployment_allowance  # 失業手当
-        income_from_BI = self.total_population * self.model.BI  # BI
+        income_from_pensions = self.model.government.pensions(self.num_of_retirees) # 年金受給者からの年金
+        income_from_child_allowance = self.model.government.child_allowance(self.num_of_non_workers)  # 児童手当
+        income_from_unemployment_allowance = self.model.government.unemployment_allowance(sum(1 for worker in self.workers if worker.firm is None))  # 失業手当
+        income_from_BI = self.model.government.BI(self.total_population)  # BI
+        
         self.income = income_from_wages + income_from_pensions + income_from_child_allowance + income_from_unemployment_allowance + income_from_BI  # 合計収入
     
     def step(self):
         self.consider_job_change()
         self.calculate_income()
-        self.disposable_income = self.income - self.model.get_taxes(self.income) #可処分所得=収入-税金
-        self.savings += self.disposable_income * random.uniform(0, 0.5)  # 貯蓄額は50%以下を消費
-        self.model.bank.deposit(self.disposable_income - self.savings)
+        self.disposable_income = self.income - self.model.government.get_taxes(self.income) #可処分所得=収入-税金
+        self.consumption = self.disposable_income * random.uniform(0, 0.5)  # 可処分所得は50%以下を消費
+        self.savings += self.disposable_income - self.consumption
+        self.savings += self.model.bank.deposit(self.savings)
 
 
 # 企業エージェントのクラス
@@ -142,89 +111,154 @@ class FirmAgent(Agent):
     def __init__(self, unique_id, model, initial_worker_count):
         super().__init__(unique_id, model)
         
-        self.capital = initial_worker_count * 10  # 初期資本
-        self.sales_target = random.randint(50, 100)  # 売上目標
+        self.capital = 1000 
+        # self.capital = random.randint(1000, 10000)  # 初期資本
+        self.sales_target = 500
+        #self.sales_target = random.randint(500, 1000)  # 売上目標
         self.sales = 0  # 売上
         self.average_sales = 0  # 平均売上
         self.profit = 0  # 利益
         self.deficit_period = 0  # 連続赤字期間
-        self.workers = []  # 雇用中の労働者リスト
-        self.wage = 5  # 初期賃金
+        self.hire_workers = []  # 雇用中の労働者リスト
+        self.wage = 30  # 初期賃金
+        self.debt = 0 #借金
+        self.job_openings = 0  # 追加：求人公開数：ここでは不足している生産能力
+        self.required_capacity = self.sales_target // 10
+        # 全労働者から無職のものを選び出す
+        unemployed_workers = [worker for worker in self.model.schedule.agents if not worker.employed]
+    
+        while self.calculate_total_capacity() < self.required_capacity and unemployed_workers:
+        # 雇う: ここでは簡単のため、無職の労働者から最初の人を雇うと仮定します
+            worker_to_hire = unemployed_workers.pop(0)
+            self.hire(worker_to_hire)
+    
+    def open_job_positions(self):
+        """求人を公開する"""
+        self.job_openings = self.required_capacity - self.calculate_total_capacity()
 
+    def update_sales(self, total_consumption, total_capacity):
+        # 家計エージェントの消費金額を売上に反映する
+        if total_capacity > 0:
+            self.sales = (self.calculate_total_capacity() / total_capacity) * total_consumption
+        else:
+            self.sales = 0
+
+    def calculate_total_capacity(self):
+        """総生産能力を計算する"""
+        return sum(worker.production_capacity for worker in self.hire_workers)
+    
+    def hire_or_fire(self):
+        """売上目標に基づいて労働者を雇い、解雇する"""
+        while self.calculate_total_capacity() > self.required_capacity and self.hire_workers:
+        # 解雇: ここでは生産能力が最も低い労働者を解雇すると仮定します
+            worker_to_fire = min(self.hire_workers, key=lambda worker: worker.production_capacity)
+            self.fire(worker_to_fire)
+            self.open_job_positions()  # 求人を公開する
+        self.open_job_positions()  # 求人を公開する
+        
     def hire(self, worker):
         # 新たに労働者を雇う
-        self.workers.append(worker)
+        self.hire_workers.append(worker)
         worker.firm = self
         worker.employed = True
 
     def fire(self, worker):
         # 労働者を解雇する
-        self.workers.remove(worker)
+        self.hire_workers.remove(worker)
         worker.firm = None
         worker.employed = False
 
     def set_wage(self):
         # 賃金を企業の利益に応じて調整する
-        if self.profit > 0:
-            self.wage += 1
+        if self.profit > 0 and self.capital > 0 :
+            self.wage += 10
         else:
-            self.wage -= 1 if self.wage > 1 else 0  # 賃金は1以上
-
-    def calculate_sales(self):
-        # 売上を計算する（生産能力に比例）
-        self.sales = sum(worker.production_capacity for worker in self.workers)
+            self.wage -= 10 if self.wage > 1 else 0  # 賃金は1以上
 
     def calculate_profit(self):
         # 利益を計算する（売上からコスト（賃金）を差し引いたもの）
-        self.profit = self.sales - sum(self.wage for _ in self.workers)
+        self.profit = self.sales - sum(self.wage for _ in self.hire_workers)
+        if self.debt == 0 or self.profit < 0 :
+            self.capital += self.profit
+        else:
+            amount_to_repay = self.model.bank.repay(self.profit)  # 返済額を計算する
+            self.debt -= amount_to_repay
+            remaining_amount = self.profit - amount_to_repay  # 返済後の残金を計算する
+            if remaining_amount > 0 :
+                self.capital += remaining_amount  # 残金がプラスであればそれを資本に加える
+
+    
+    def borrowing_decision(self): #借金
+        if self.capital < 0 :
+            amount_to_borrow = -self.capital  # 借入額はプラスの値でなければならない
+            self.debt = self.model.bank.borrow(amount_to_borrow)
+            self.capital = 0
+    
+
 
     def adjust_sales_target(self):
         # 売上目標を調整する
         if self.sales > self.average_sales:
-            self.sales_target += 1
+            self.sales_target += 50
         else:
-            self.sales_target -= 1 if self.sales_target > 1 else 0  # 売上目標は1以上
+            self.sales_target -= 50 if self.sales_target > 50 else 50  # 売上目標は50以上
 
     def bankruptcy(self):
         # 倒産する（全ての労働者を解雇する）
-        for worker in self.workers:
+        for worker in self.hire_workers:
             self.fire(worker)
 
     def step(self):
-        self.calculate_sales()
+        self.update_sales(self.model.total_consumption, self.model.total_capacity)
         self.calculate_profit()
+        self.borrowing_decision()
+        self.hire_or_fire()  # 売上目標に基づいて労働者を雇い、解雇する
         self.set_wage()
         self.adjust_sales_target()
 
-        self.model.government.collect_tax(self.sales * self.model.tax_rate)  # 税金を納める
+        self.model.government.collect_tax(self.sales)  # 税金を納める
 
         # 連続赤字期間をカウント
-        if self.profit < 0:
+        if self.debt > 0:
             self.deficit_period += 1
             if self.deficit_period >= 12:  # 連続赤字が12期以上続いたら倒産
                 self.bankruptcy()
         else:
             self.deficit_period = 0  # 利益が出たら連続赤字期間をリセット
 
-""" class FirmAgent(Agent):
-    def __init__(self, unique_id, model):
-        super().__init__(unique_id, model)
-        self.sales_target = random.randint(100, 1000)
-        self.production_capacity_demand = self.sales_target / self.model.get_average_sales() if self.model.get_average_sales() != 0 else 0
-        self.wage = random.uniform(10, 50)
-        self.assets = 0
 
-    def step(self):
-        self.production_capacity_demand = self.sales_target / self.model.get_average_sales()
-        available_capacity = self.model.get_production_capacity()
-        if available_capacity < self.production_capacity_demand:
-            self.model.bank.borrow(100)  # 新たな生産能力の獲得に資金不足なら借り入れ
-        self.assets += self.model.get_sales() * self.wage - self.model.get_taxes(self.model.get_sales()) """
 
 # 政府エージェントのクラス
 class GovernmentAgent(Agent):
     def __init__(self, unique_id, model):
         super().__init__(unique_id, model)
+        self.pension = 0 # 年金
+        self.child_allowance = 0  # 児童手当
+        self.unemployment_allowance = 0 # 失業手当
+        self.BI = 10 # BI
+       
+
+    def pensions(self, num_of_retirees):
+         # 年金受給者からの年金
+        pass
+    def child_allowance(self,num_of_non_workers) :
+        # 児童手当
+        pass
+
+    def unemployment_allowance(self , num_of_unemployment) :
+        # 失業手当
+        pass
+        
+    def BI(self, total_population) : 
+        # BI
+        pass
+
+    def get_taxes(self, income):
+        pass
+    def collect_tax(self, sales):
+        pass
+
+
 
     def step(self):
         tax_revenue = self.model.get_tax_revenue()
@@ -243,6 +277,9 @@ class BankAgent(Agent):
 
     def borrow(self, amount):
         self.deposits -= amount
+    
+    def repay(self, profit) :
+        pass
 
     def step(self):
         interest = self.deposits * self.interest_rate
