@@ -14,7 +14,7 @@ class Worker:
         
 # 家計エージェントのクラス
 class HouseholdAgent(Agent):
-    def __init__(self, unique_id, model, num_of_workers, num_of_non_workers, num_of_retirees):
+    def __init__(self, unique_id, model):
         super().__init__(unique_id, model)
         
         self.total_population = random.randint(1, 6)  # 1から6人の世帯人数
@@ -27,7 +27,7 @@ class HouseholdAgent(Agent):
         self.num_of_retirees = self.total_population - self.num_of_workers - self.num_of_non_workers  # 残りは年金受給者
         
         # 各労働者エージェントは生産能力と働く企業エージェントを属性として持つ
-        self.workers = [Worker(random.randint(1, 5), None) for _ in range(num_of_workers)]
+        self.workers = [Worker(random.randint(1, 5), None) for _ in range(self.num_of_workers)]
         self.income = 0 #収入
         self.disposable_income = 0 #可処分所得
         self.consumption = 0 #消費
@@ -100,7 +100,7 @@ class HouseholdAgent(Agent):
     def step(self):
         self.consider_job_change()
         self.calculate_income()
-        self.disposable_income = self.income - self.model.government.get_taxes(self.income) #可処分所得=収入-税金
+        self.disposable_income = self.income - self.model.government.collect_taxes_house(self.income) #可処分所得=収入-税金
         self.consumption = self.disposable_income * random.uniform(0, 0.5)  # 可処分所得は50%以下を消費
         self.savings += self.disposable_income - self.consumption
         self.savings += self.model.bank.deposit(self.savings)
@@ -108,7 +108,7 @@ class HouseholdAgent(Agent):
 
 # 企業エージェントのクラス
 class FirmAgent(Agent):
-    def __init__(self, unique_id, model, initial_worker_count):
+    def __init__(self, unique_id, model):
         super().__init__(unique_id, model)
         
         self.capital = 1000 
@@ -122,13 +122,13 @@ class FirmAgent(Agent):
         self.hire_workers = []  # 雇用中の労働者リスト
         self.wage = 30  # 初期賃金
         self.debt = 0 #借金
+        calculate_capacity = 0 #会社の生産能力
         self.job_openings = 0  # 追加：求人公開数：ここでは不足している生産能力
         self.required_capacity = self.sales_target // 10
-        # 全労働者から無職のものを選び出す
-        unemployed_workers = [worker for worker in self.model.schedule.agents if not worker.employed]
+        unemployed_workers = [worker for agent in self.model.schedule.agents if isinstance(agent, HouseholdAgent) for worker in agent.workers if not worker.employed]
     
         while self.calculate_total_capacity() < self.required_capacity and unemployed_workers:
-        # 雇う: ここでは簡単のため、無職の労働者から最初の人を雇うと仮定します
+            # 雇う: ここでは簡単のため、無職の労働者から最初の人を雇うと仮定します
             worker_to_hire = unemployed_workers.pop(0)
             self.hire(worker_to_hire)
     
@@ -145,7 +145,9 @@ class FirmAgent(Agent):
 
     def calculate_total_capacity(self):
         """総生産能力を計算する"""
-        return sum(worker.production_capacity for worker in self.hire_workers)
+        self.calculate_capacity = sum(worker.production_capacity for worker in self.hire_workers )
+        return self.calculate_capacity
+         
     
     def hire_or_fire(self):
         """売上目標に基づいて労働者を雇い、解雇する"""
@@ -163,17 +165,19 @@ class FirmAgent(Agent):
         worker.employed = True
 
     def fire(self, worker):
-        # 労働者を解雇する
-        self.hire_workers.remove(worker)
-        worker.firm = None
-        worker.employed = False
+    # 労働者を解雇する
+        if worker in self.hire_workers:
+            self.hire_workers.remove(worker)
+            worker.firm = None
+            worker.employed = False
+
 
     def set_wage(self):
         # 賃金を企業の利益に応じて調整する
         if self.profit > 0 and self.capital > 0 :
-            self.wage += 10
+            self.wage += 1
         else:
-            self.wage -= 10 if self.wage > 1 else 0  # 賃金は1以上
+            self.wage -= 1 if self.wage > 1 else 0  # 賃金は1以上
 
     def calculate_profit(self):
         # 利益を計算する（売上からコスト（賃金）を差し引いたもの）
@@ -181,7 +185,7 @@ class FirmAgent(Agent):
         if self.debt == 0 or self.profit < 0 :
             self.capital += self.profit
         else:
-            amount_to_repay = self.model.bank.repay(self.profit)  # 返済額を計算する
+            amount_to_repay = self.model.bank.repay(self.profit , self.debt)  # 返済額を計算する
             self.debt -= amount_to_repay
             remaining_amount = self.profit - amount_to_repay  # 返済後の残金を計算する
             if remaining_amount > 0 :
@@ -216,7 +220,7 @@ class FirmAgent(Agent):
         self.set_wage()
         self.adjust_sales_target()
 
-        self.model.government.collect_tax(self.sales)  # 税金を納める
+        self.sales -= self.model.government.collect_taxes_firm(self.sales)  # 税金を納める
 
         # 連続赤字期間をカウント
         if self.debt > 0:
@@ -232,58 +236,76 @@ class FirmAgent(Agent):
 class GovernmentAgent(Agent):
     def __init__(self, unique_id, model):
         super().__init__(unique_id, model)
-        self.pension = 0 # 年金
-        self.child_allowance = 0  # 児童手当
-        self.unemployment_allowance = 0 # 失業手当
-        self.BI = 10 # BI
+        self.pension_amount = 0 # 年金
+        self.child_allowance_amount = 0  # 児童手当
+        self.unemployment_allowance_amount = 0 # 失業手当
+        self.BI_amount = 10 # BI
+        self.total_amount = 0 #政府の税金での収入と支出．とりあえずマイナスでもいい．
+        self.tax_rate_house = 0.4 #家庭への税率
+        self.tax_rate_firm = 0.4 #企業への税率
        
 
     def pensions(self, num_of_retirees):
          # 年金受給者からの年金
-        pass
+         self.total_amount -= self.pension_amount * num_of_retirees
+         return self.pension_amount * num_of_retirees
+
+        
     def child_allowance(self,num_of_non_workers) :
         # 児童手当
-        pass
+        self.total_amount -= self.child_allowance_amount * num_of_non_workers
+        return self.child_allowance_amount * num_of_non_workers
 
     def unemployment_allowance(self , num_of_unemployment) :
         # 失業手当
-        pass
+        self.total_amount -= self.unemployment_allowance_amount * num_of_unemployment
+        return self.unemployment_allowance_amount * num_of_unemployment
         
     def BI(self, total_population) : 
         # BI
-        pass
+        self.total_amount -= self.BI_amount * total_population
+        return self.BI_amount * total_population
 
-    def get_taxes(self, income):
-        pass
-    def collect_tax(self, sales):
-        pass
+    def collect_taxes_house(self, income):
+        self.total_amount += self.tax_rate_house * income
+        return self.tax_rate_house * income
+    
+    def collect_taxes_firm(self, sales):
+        self.total_amount += self.tax_rate_firm * sales
+        return self.tax_rate_firm * sales
 
 
 
     def step(self):
-        tax_revenue = self.model.get_tax_revenue()
-        social_security_expenses = self.model.get_social_security_expenses()
-        self.model.bank.deposit(tax_revenue - social_security_expenses)
-
+        pass
 # 銀行エージェントのクラス
 class BankAgent(Agent):
     def __init__(self, unique_id, model):
         super().__init__(unique_id, model)
         self.deposits = 0
-        self.interest_rate = 0.05
+        self.interest_rate = 0.01
 
-    def deposit(self, amount):
-        self.deposits += amount
 
-    def borrow(self, amount):
-        self.deposits -= amount
+    def deposit(self, savings):
+        self.deposits += savings * (1 + self.interest_rate)
+        return savings * (1 + self.interest_rate) 
+
+    def borrow(self, amount_to_borrow):
+        self.deposits -= amount_to_borrow
+        return amount_to_borrow
     
-    def repay(self, profit) :
-        pass
+    def repay(self, profit , debt) :
+        i = profit - debt * (1 + self.interest_rate)
+        if i > 0:
+            self.deposits += debt * (1 + self.interest_rate)
+            return debt * (1 + self.interest_rate)
+        else :
+            self.deposits += profit
+            return profit
+        
 
     def step(self):
-        interest = self.deposits * self.interest_rate
-        self.deposits += interest
+        pass
 
 # シミュレーションモデルのクラス
 class EconomyModel(Model):
@@ -291,6 +313,11 @@ class EconomyModel(Model):
         self.num_households = num_households
         self.num_firms = num_firms
         self.schedule = RandomActivation(self)
+
+
+        self.total_capacity = 0
+        self.total_consumption = 0
+
         self.datacollector = DataCollector(
             model_reporters={
                 'Average Household Wealth': compute_average_wealth,
@@ -311,35 +338,16 @@ class EconomyModel(Model):
         self.bank = BankAgent(self.num_households + self.num_firms + 1, self)
         self.schedule.add(self.government)
         self.schedule.add(self.bank)
+    
+    
 
     def step(self):
+        self.total_capacity = sum([agent.calculate_total_capacity() for agent in self.schedule.agents if isinstance(agent, FirmAgent)])
+        self.total_consumption = sum([agent.consumption for agent in self.schedule.agents if isinstance(agent, HouseholdAgent)])
         self.schedule.step()
         self.datacollector.collect(self)
 
-    def get_wage(self):
-        return random.uniform(10, 30)
-
-    def get_social_security(self):
-        return random.uniform(0, 10)
-
-    def get_taxes(self, income):
-        return income * 0.2  # 簡略化のため、税金は20%固定とする
-
-    def get_production_capacity(self):
-        return sum([agent.production_capacity for agent in self.schedule.agents if isinstance(agent, HouseholdAgent)])
-
-    def get_sales(self):
-        return sum([agent.sales_target for agent in self.schedule.agents if isinstance(agent, FirmAgent)])
-
-    def get_average_sales(self):
-        sales = [agent.sales_target for agent in self.schedule.agents if isinstance(agent, FirmAgent)]
-        return statistics.mean(sales) if sales else 0
-
-    def get_tax_revenue(self):
-        return sum([agent.income for agent in self.schedule.agents if isinstance(agent, HouseholdAgent)]) * 0.1
-
-    def get_social_security_expenses(self):
-        return sum([agent.income for agent in self.schedule.agents if isinstance(agent, HouseholdAgent)]) * 0.05
+    
 
 # 財産の平均値を計算する関数
 def compute_average_wealth(model):
