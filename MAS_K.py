@@ -101,9 +101,10 @@ class HouseholdAgent(Agent):
         self.consider_job_change()
         self.calculate_income()
         self.disposable_income = self.income - self.model.government.collect_taxes_house(self.income) #可処分所得=収入-税金
-        self.consumption = self.disposable_income * random.uniform(0, 0.5)  # 可処分所得は50%以下を消費
+        self.consumption = self.disposable_income * random.uniform(0, 0.8)  # 可処分所得は50%以下を消費
         self.savings += self.disposable_income - self.consumption
-        self.savings += self.model.bank.deposit(self.savings)
+        # self.savings += self.model.bank.deposit(self.savings)
+        # print(self.savings)
 
 
 # 企業エージェントのクラス
@@ -111,10 +112,10 @@ class FirmAgent(Agent):
     def __init__(self, unique_id, model):
         super().__init__(unique_id, model)
         
-        self.capital = 1000 
-        # self.capital = random.randint(1000, 10000)  # 初期資本
-        self.sales_target = 500
-        #self.sales_target = random.randint(500, 1000)  # 売上目標
+        # self.capital = 1000 
+        self.capital = random.randint(1000, 10000)  # 初期資本
+        # self.sales_target = 500
+        self.sales_target = random.randint(500, 1000)  # 売上目標
         self.sales = 0  # 売上
         self.average_sales = 0  # 平均売上
         self.profit = 0  # 利益
@@ -131,6 +132,8 @@ class FirmAgent(Agent):
             # 雇う: ここでは簡単のため、無職の労働者から最初の人を雇うと仮定します
             worker_to_hire = unemployed_workers.pop(0)
             self.hire(worker_to_hire)
+        # print(f"Firm {self.unique_id} has {len(self.hire_workers)} workers.")
+
     
     def open_job_positions(self):
         """求人を公開する"""
@@ -229,6 +232,7 @@ class FirmAgent(Agent):
                 self.bankruptcy()
         else:
             self.deficit_period = 0  # 利益が出たら連続赤字期間をリセット
+ #       print(f"Firm {self.unique_id} has {len(self.hire_workers)} workers.")
 
 
 
@@ -239,7 +243,7 @@ class GovernmentAgent(Agent):
         self.pension_amount = 0 # 年金
         self.child_allowance_amount = 0  # 児童手当
         self.unemployment_allowance_amount = 0 # 失業手当
-        self.BI_amount = 10 # BI
+        self.BI_amount = 0 # BI
         self.total_amount = 0 #政府の税金での収入と支出．とりあえずマイナスでもいい．
         self.tax_rate_house = 0.4 #家庭への税率
         self.tax_rate_firm = 0.4 #企業への税率
@@ -321,8 +325,12 @@ class EconomyModel(Model):
         self.datacollector = DataCollector(
             model_reporters={
                 'Average Household Wealth': compute_average_wealth,
-                'Median Household Wealth': compute_median_wealth
+                'Median Household Wealth': compute_median_wealth,
+                'Average Household income': compute_average_income,
+                'Median Household income': compute_median_income
             }
+            # model_reporters={"Firm_{}".format(i): lambda m, i=i+self.num_households: len(m.schedule.agents[i].hire_workers) if isinstance(m.schedule.agents[i], FirmAgent) else 0 for i in range(num_firms)}
+
         )
 
         # エージェントの初期化
@@ -346,6 +354,7 @@ class EconomyModel(Model):
         self.total_consumption = sum([agent.consumption for agent in self.schedule.agents if isinstance(agent, HouseholdAgent)])
         self.schedule.step()
         self.datacollector.collect(self)
+        
 
     
 
@@ -358,6 +367,21 @@ def compute_average_wealth(model):
 def compute_median_wealth(model):
     wealths = [agent.savings for agent in model.schedule.agents if isinstance(agent, HouseholdAgent)]
     return statistics.median(wealths) if wealths else 0
+
+# 収入の平均値を計算する関数
+def compute_average_income(model):
+    wealths = [agent.income for agent in model.schedule.agents if isinstance(agent, HouseholdAgent)]
+    return statistics.mean(wealths) if wealths else 0
+
+# 収入の中央値を計算する関数
+def compute_median_income(model):
+    wealths = [agent.income for agent in model.schedule.agents if isinstance(agent, HouseholdAgent)]
+    return statistics.median(wealths) if wealths else 0
+
+# 企業ごとの従業員の人数を計算する関数
+def compute_firm_worker(model):
+    workers = []
+
 
 # メインの実行部分
 num_households = 100
@@ -373,7 +397,14 @@ data = model.datacollector.get_model_vars_dataframe()
 
 plt.plot(data.index, data['Average Household Wealth'], label='Average Wealth')
 plt.plot(data.index, data['Median Household Wealth'], label='Median Wealth')
+# plt.plot(data.index, data['Average Household income'], label='Average income')
+# plt.plot(data.index, data['Median Household income'], label='Median income')
 plt.xlabel('Steps')
 plt.ylabel('Wealth')
 plt.legend()
 plt.show()
+# data.plot()
+# plt.title('Number of Employees per Firm Over Time')
+# plt.ylabel('Number of Employees')
+# plt.xlabel('Steps')
+# plt.show()
