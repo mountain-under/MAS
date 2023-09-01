@@ -17,9 +17,9 @@ class HouseholdAgent(Agent):
     def __init__(self, unique_id, model):
         super().__init__(unique_id, model)
         
-        self.total_population = random.randint(1, 6)  # 1から6人の世帯人数
+        self.total_population = random.randint(1, 5)  # 1から5人の世帯人数
         
-        self.num_of_workers = random.randint(0, self.total_population)  # 労働者の人数
+        self.num_of_workers = random.randint(0, min(2 , self.total_population))  # 労働者の人数
         if self.total_population - self.num_of_workers > 0:
             self.num_of_non_workers = random.randint(0, self.total_population - self.num_of_workers)  # 非労働者の人数
         else:
@@ -101,7 +101,7 @@ class HouseholdAgent(Agent):
         self.consider_job_change()
         self.calculate_income()
         self.disposable_income = self.income - self.model.government.collect_taxes_house(self.income) #可処分所得=収入-税金
-        self.consumption = self.disposable_income * random.uniform(0, 0.8)  # 可処分所得は50%以下を消費
+        self.consumption = self.disposable_income * random.uniform(0, 0.8)  # 可処分所得は80%以下を消費
         self.savings += self.disposable_income - self.consumption
         # self.savings += self.model.bank.deposit(self.savings)
         # print(self.savings)
@@ -330,6 +330,9 @@ class EconomyModel(Model):
                 'Median Household income': compute_median_income
             }
             # model_reporters={"Firm_{}".format(i): lambda m, i=i+self.num_households: len(m.schedule.agents[i].hire_workers) if isinstance(m.schedule.agents[i], FirmAgent) else 0 for i in range(num_firms)}
+            # model_reporters={
+
+            # }
 
         )
 
@@ -384,7 +387,7 @@ def compute_firm_worker(model):
 
 
 # メインの実行部分
-num_households = 100
+num_households = 300
 num_firms = 10
 num_steps = 100
 
@@ -394,14 +397,20 @@ for _ in range(num_steps):
     model.step()
 
 data = model.datacollector.get_model_vars_dataframe()
-
+plt.figure()   #新しいウィンドウを描画
 plt.plot(data.index, data['Average Household Wealth'], label='Average Wealth')
 plt.plot(data.index, data['Median Household Wealth'], label='Median Wealth')
-# plt.plot(data.index, data['Average Household income'], label='Average income')
-# plt.plot(data.index, data['Median Household income'], label='Median income')
 plt.xlabel('Steps')
 plt.ylabel('Wealth')
 plt.legend()
+plt.savefig("1_1.png")
+plt.figure()   #新しいウィンドウを描画
+plt.plot(data.index, data['Average Household income'], label='Average income')
+plt.plot(data.index, data['Median Household income'], label='Median income')
+plt.xlabel('Steps')
+plt.ylabel('Wealth')
+plt.legend()
+plt.savefig("1_2.png")
 plt.show()
 # data.plot()
 # plt.title('Number of Employees per Firm Over Time')
