@@ -4,6 +4,7 @@ from mesa import Agent, Model
 from mesa.time import RandomActivation
 from mesa.datacollection import DataCollector
 import matplotlib.pyplot as plt
+import pandas as pd
 
 class Worker:
     def __init__(self, production_capacity, firm):
@@ -19,9 +20,9 @@ class HouseholdAgent(Agent):
         
         self.total_population = random.randint(1, 5)  # 1から5人の世帯人数
         
-        self.num_of_workers = random.randint(0, min(2 , self.total_population))  # 労働者の人数
+        self.num_of_workers = random.randint(1, min(2 , self.total_population))  # 労働者の人数
         if self.total_population - self.num_of_workers > 0:
-            self.num_of_non_workers = random.randint(0, self.total_population - self.num_of_workers)  # 非労働者の人数
+            self.num_of_non_workers = random.randint(0, self.total_population - self.num_of_workers)  # 非労働者の人数．ここでは子ども
         else:
             self.num_of_non_workers = 0
         self.num_of_retirees = self.total_population - self.num_of_workers - self.num_of_non_workers  # 残りは年金受給者
@@ -53,8 +54,13 @@ class HouseholdAgent(Agent):
 
     def should_consider_job_change(self, worker):
         # 自身の生産能力が3以上であれば、20%の確率で転職を考慮
-        if worker.production_capacity >= 3 and random.random() <= 0.2:
+        if worker.production_capacity == 5 and random.random() <= 0.3:
             return True
+        if worker.production_capacity == 4 and random.random() <= 0.1:
+            return True
+        if worker.production_capacity == 3 and random.random() <= 0.05:
+            return True
+        
         else:
             return False
 
@@ -70,6 +76,7 @@ class HouseholdAgent(Agent):
         for worker in self.workers:
             if worker.employed:  # 労働者が現在雇用されている場合
                 if self.should_consider_job_change(worker):
+                    # print(worker.production_capacity)
                     new_firm = self.find_higher_paying_job(worker)
                     if new_firm is not None and new_firm != worker.firm:
                         worker.firm.fire(worker)  # 以前の雇用者から離職
@@ -83,26 +90,56 @@ class HouseholdAgent(Agent):
                     if new_firm is not None:
                         worker.firm = new_firm  # 新しい雇用者に就職
                         worker.employed = True  # 雇用状態を更新
-                        
+    
+    def calculate_wage_tax(self, wage):
+        if wage < 10:
+            tax_rate = 0.1
+        elif wage < 30:
+            tax_rate = 0.2
+        elif wage < 50:
+            tax_rate = 0.3
+        elif wage < 70:
+            tax_rate = 0.4
+        elif wage < 90:
+            tax_rate = 0.5
+        else:
+            tax_rate = 0.6
+        return wage * tax_rate 
+
+    def calculate_disposable_income(self): #可処分所得=合計賃金-税金
+        income_from_wages = 0
+        total_wage_tax = 0
+        for worker in self.workers:
+            if worker.firm is not None:
+                wage = worker.firm.wage
+                wage_tax = self.calculate_wage_tax(wage)
+                income_from_wages += (wage - wage_tax)
+                total_wage_tax += wage_tax
+        self.disposable_income = income_from_wages
+        # 税金を政府に納付
+        self.model.government.collect_wage_tax(total_wage_tax)
+        
+
 
                     
     # 収入の計算：労働者が働いている企業からの賃金、年金、政府からの社会保障の合計
     def calculate_income(self):
         # 働いている労働者からの賃金の合計
-        income_from_wages = sum(worker.firm.wage for worker in self.workers if worker.firm is not None)
+        # income_from_wages = sum(worker.firm.wage for worker in self.workers if worker.firm is not None)
         income_from_pensions = self.model.government.pensions(self.num_of_retirees) # 年金受給者からの年金
         income_from_child_allowance = self.model.government.child_allowance(self.num_of_non_workers)  # 児童手当
         income_from_unemployment_allowance = self.model.government.unemployment_allowance(sum(1 for worker in self.workers if worker.firm is None))  # 失業手当
         income_from_BI = self.model.government.BI(self.total_population)  # BI
         
-        self.income = income_from_wages + income_from_pensions + income_from_child_allowance + income_from_unemployment_allowance + income_from_BI  # 合計収入
+        self.income = self.disposable_income + income_from_pensions + income_from_child_allowance + income_from_unemployment_allowance + income_from_BI  # 合計収入
     
     def step(self):
         self.consider_job_change()
+        self.calculate_disposable_income()
         self.calculate_income()
-        self.disposable_income = self.income - self.model.government.collect_taxes_house(self.income) #可処分所得=収入-税金
-        self.consumption = self.disposable_income * random.uniform(0, 0.8)  # 可処分所得は80%以下を消費
-        self.savings += self.disposable_income - self.consumption
+        # self.disposable_income = self.income - self.model.government.collect_taxes_house(self.income) #可処分所得=収入-税金
+        self.consumption = self.income * 0.7 #random.uniform(0.3, 0.8)  # 収入は80%以下を消費
+        self.savings += self.income - self.consumption
         # self.savings += self.model.bank.deposit(self.savings)
         # print(self.savings)
 
@@ -121,7 +158,7 @@ class FirmAgent(Agent):
         self.profit = 0  # 利益
         self.deficit_period = 0  # 連続赤字期間
         self.hire_workers = []  # 雇用中の労働者リスト
-        self.wage = 30  # 初期賃金
+        self.wage = random.randint(20, 50) # 初期賃金
         self.debt = 0 #借金
         calculate_capacity = 0 #会社の生産能力
         self.job_openings = 0  # 追加：求人公開数：ここでは不足している生産能力
@@ -178,7 +215,10 @@ class FirmAgent(Agent):
     def set_wage(self):
         # 賃金を企業の利益に応じて調整する
         if self.profit > 0 and self.capital > 0 :
-            self.wage += 1
+            if random.random() <= 0.5:
+                self.wage += 1
+            
+            
         else:
             self.wage -= 1 if self.wage > 1 else 0  # 賃金は1以上
 
@@ -225,14 +265,15 @@ class FirmAgent(Agent):
 
         self.sales -= self.model.government.collect_taxes_firm(self.sales)  # 税金を納める
 
-        # 連続赤字期間をカウント
+        # # 連続赤字期間をカウント
         if self.debt > 0:
             self.deficit_period += 1
             if self.deficit_period >= 12:  # 連続赤字が12期以上続いたら倒産
                 self.bankruptcy()
         else:
             self.deficit_period = 0  # 利益が出たら連続赤字期間をリセット
- #       print(f"Firm {self.unique_id} has {len(self.hire_workers)} workers.")
+        # print(f"Firm {self.unique_id} has {len(self.hire_workers)} workers.")
+        #print(f"Firm {self.unique_id} has { self.sales} profit.")
 
 
 
@@ -243,9 +284,9 @@ class GovernmentAgent(Agent):
         self.pension_amount = 0 # 年金
         self.child_allowance_amount = 0  # 児童手当
         self.unemployment_allowance_amount = 0 # 失業手当
-        self.BI_amount = 0 # BI
+        self.BI_amount = 8 # BI
         self.total_amount = 0 #政府の税金での収入と支出．とりあえずマイナスでもいい．
-        self.tax_rate_house = 0.4 #家庭への税率
+        # self.tax_rate_house = 0.4 #家庭への税率
         self.tax_rate_firm = 0.4 #企業への税率
        
 
@@ -270,10 +311,13 @@ class GovernmentAgent(Agent):
         self.total_amount -= self.BI_amount * total_population
         return self.BI_amount * total_population
 
-    def collect_taxes_house(self, income):
-        self.total_amount += self.tax_rate_house * income
-        return self.tax_rate_house * income
-    
+    # def collect_taxes_house(self, income):
+    #     self.total_amount += self.tax_rate_house * income
+    #     return self.tax_rate_house * income
+    # 新しいメソッドを追加：賃金に対する税金を収集
+    def collect_wage_tax(self, total_wage_tax):
+        self.total_amount += total_wage_tax
+
     def collect_taxes_firm(self, sales):
         self.total_amount += self.tax_rate_firm * sales
         return self.tax_rate_firm * sales
@@ -321,18 +365,26 @@ class EconomyModel(Model):
 
         self.total_capacity = 0
         self.total_consumption = 0
-
-        self.datacollector = DataCollector(
+        self.datacollector1 = DataCollector(
             model_reporters={
                 'Average Household Wealth': compute_average_wealth,
                 'Median Household Wealth': compute_median_wealth,
-                'Average Household income': compute_average_income,
-                'Median Household income': compute_median_income
+                'Average Household disposable_income': compute_average_disposable_income,
+                'Median Household disposable_income': compute_median_disposable_income,
+                'Total Income': total_income
+                
             }
             # model_reporters={"Firm_{}".format(i): lambda m, i=i+self.num_households: len(m.schedule.agents[i].hire_workers) if isinstance(m.schedule.agents[i], FirmAgent) else 0 for i in range(num_firms)}
-            # model_reporters={
+            
+            
 
-            # }
+        )
+
+        self.datacollector2 = DataCollector(
+          
+            agent_reporters={
+                "production_capacity_wages": lambda a: [(worker.production_capacity, worker.firm.wage) for worker in a.workers if worker.firm is not None] if isinstance(a, HouseholdAgent) else None
+            }
 
         )
 
@@ -356,7 +408,8 @@ class EconomyModel(Model):
         self.total_capacity = sum([agent.calculate_total_capacity() for agent in self.schedule.agents if isinstance(agent, FirmAgent)])
         self.total_consumption = sum([agent.consumption for agent in self.schedule.agents if isinstance(agent, HouseholdAgent)])
         self.schedule.step()
-        self.datacollector.collect(self)
+        self.datacollector1.collect(self)
+        self.datacollector2.collect(self)
         
 
     
@@ -372,48 +425,116 @@ def compute_median_wealth(model):
     return statistics.median(wealths) if wealths else 0
 
 # 収入の平均値を計算する関数
-def compute_average_income(model):
-    wealths = [agent.income for agent in model.schedule.agents if isinstance(agent, HouseholdAgent)]
-    return statistics.mean(wealths) if wealths else 0
+def compute_average_disposable_income(model):
+    disposable_incomes = [agent.disposable_income for agent in model.schedule.agents if isinstance(agent, HouseholdAgent)]
+    return statistics.mean(disposable_incomes) if disposable_incomes else 0
 
 # 収入の中央値を計算する関数
-def compute_median_income(model):
-    wealths = [agent.income for agent in model.schedule.agents if isinstance(agent, HouseholdAgent)]
-    return statistics.median(wealths) if wealths else 0
+def compute_median_disposable_income(model):
+    disposable_incomes = [agent.disposable_income for agent in model.schedule.agents if isinstance(agent, HouseholdAgent)]
+    return statistics.median(disposable_incomes) if disposable_incomes else 0
+
+# 家計の総収入
+def total_income(model):
+    incomes = [agent.disposable_income for agent in model.schedule.agents if isinstance(agent, HouseholdAgent)]
+    return sum(incomes) if incomes else 0
 
 # 企業ごとの従業員の人数を計算する関数
 def compute_firm_worker(model):
     workers = []
 
+def production_capacity_average_wage(model, i):
+    wages = []
+
 
 # メインの実行部分
-num_households = 300
-num_firms = 10
+num_households = 1000
+num_firms = 50
 num_steps = 100
+num_simulations = 100  # シミュレーションの回数
+
+# 以下の変数で複数回のシミュレーション結果を一時的に保存
+all_average_wealths = []
+all_median_wealths = []
+all_average_disposable_incomes = []
+all_median_disposable_incomes = []
+all_total_incomes = []
+all_average_wages_by_capacity = []
 
 model = EconomyModel(num_households, num_firms)
 
 for _ in range(num_steps):
     model.step()
 
-data = model.datacollector.get_model_vars_dataframe()
+data = model.datacollector1.get_model_vars_dataframe()
 plt.figure()   #新しいウィンドウを描画
 plt.plot(data.index, data['Average Household Wealth'], label='Average Wealth')
 plt.plot(data.index, data['Median Household Wealth'], label='Median Wealth')
 plt.xlabel('Steps')
 plt.ylabel('Wealth')
 plt.legend()
-plt.savefig("1_1.png")
+plt.savefig("2_1.png")
 plt.figure()   #新しいウィンドウを描画
-plt.plot(data.index, data['Average Household income'], label='Average income')
-plt.plot(data.index, data['Median Household income'], label='Median income')
+plt.plot(data.index, data['Average Household disposable_income'], label='Average disposable_income')
+plt.plot(data.index, data['Median Household disposable_income'], label='Median disposable_income')
 plt.xlabel('Steps')
-plt.ylabel('Wealth')
+plt.ylabel('disposable_income')
 plt.legend()
-plt.savefig("1_2.png")
-plt.show()
+plt.savefig("2_2.png")
+# plt.show()
 # data.plot()
 # plt.title('Number of Employees per Firm Over Time')
 # plt.ylabel('Number of Employees')
 # plt.xlabel('Steps')
 # plt.show()
+# シミュレーションが終了した後
+agent_data = model.datacollector2.get_agent_vars_dataframe().reset_index()
+
+# production_capacityごとに賃金（wage）の平均を計算
+average_wages_by_capacity = {}
+for step, group_data in agent_data.groupby("Step"):
+    all_wages_by_capacity = {}
+    for capacity_wages in group_data["production_capacity_wages"]:
+        if capacity_wages is None:
+            continue  # Noneの場合はスキップ
+        for capacity, wage in capacity_wages:
+            if capacity not in all_wages_by_capacity:
+                all_wages_by_capacity[capacity] = []
+            all_wages_by_capacity[capacity].append(wage)
+
+    average_wages_by_capacity[step] = {capacity: statistics.mean(wages) for capacity, wages in all_wages_by_capacity.items()}
+plt.figure()   #新しいウィンドウを描画
+# 平均賃金をプロット
+for capacity in range(1, 6):  # 1から5までのproduction_capacityについて
+    plt.plot(
+        list(average_wages_by_capacity.keys()),
+        [step_data.get(capacity, None) for step_data in average_wages_by_capacity.values()],
+        label=f"Capacity {capacity}"
+    )
+plt.xlabel('Steps')
+plt.ylabel('wage')
+plt.legend()
+plt.savefig("2_3.png")
+
+total_incomes = data['Total Income']  # 総収入のデータを取得
+plt.figure()  # 新しいウィンドウを描画
+for capacity in range(1, 6):  # 1から5までのproduction_capacityについて
+    normalized_wages = []
+    for step, step_total_income in enumerate(total_incomes):
+        average_wage_for_capacity = average_wages_by_capacity.get(step, {}).get(capacity, None)
+        if average_wage_for_capacity is None or step_total_income == 0:
+            normalized_wages.append(None)
+        else:
+            normalized_wages.append(average_wage_for_capacity / step_total_income)
+
+    plt.plot(
+        list(average_wages_by_capacity.keys()),
+        normalized_wages,
+        label=f"Capacity {capacity}"
+    )
+
+plt.xlabel('Steps')
+plt.ylabel('Normalized Wage')
+plt.legend()
+plt.savefig("2_4.png")
+plt.show()
