@@ -18,6 +18,8 @@ class HouseholdAgent(Agent):
     def __init__(self, unique_id, model):
         super().__init__(unique_id, model)
         
+        self.total_population = random.randint(1, 5)  # 1から5人の世帯人数
+        
         self.num_of_workers = random.randint(1, min(2 , self.total_population))  # 労働者の人数
         if self.total_population - self.num_of_workers > 0:
             self.num_of_retirees = random.randint(0, min(2, self.total_population - self.num_of_workers))  # 非労働者の人数．年金受給者
@@ -25,13 +27,6 @@ class HouseholdAgent(Agent):
         else:
             self.num_of_retirees = 0
         self.num_of_non_workers = self.total_population - self.num_of_workers - self.num_of_retirees  # 残りはここでは子ども
-        # 各労働者エージェントは生産能力と働く企業エージェントを属性として持つ
-        self.workers = [Worker(random.randint(1, 5), None) for _ in range(self.num_of_workers)]
-        self.income = 0 #収入
-        self.disposable_income = 0 #可処分所得
-        self.consumption = 0 #消費
-        self.savings = 0 #貯蓄額
-        
         # 各労働者エージェントは生産能力と働く企業エージェントを属性として持つ
         self.workers = [Worker(random.randint(1, 5), None) for _ in range(self.num_of_workers)]
         self.income = 0 #収入
@@ -288,11 +283,11 @@ class GovernmentAgent(Agent):
         super().__init__(unique_id, model)
         self.pension_amount = 0 # 年金
         self.child_allowance_amount = 0  # 児童手当
-        self.unemployment_allowance_amount = 15 # 失業手当
-        self.BI_amount = 0 # BI
+        self.unemployment_allowance_amount = 0 # 失業手当
+        self.BI_amount = 8 # BI
         self.total_amount = 0 #政府の税金での収入と支出．とりあえずマイナスでもいい．
         # self.tax_rate_house = 0.4 #家庭への税率
-        self.tax_rate_firm = 0.4 #企業への税率
+        self.tax_rate_firm = 0.3 #企業への税率
        
 
     def pensions(self, num_of_retirees):
@@ -379,18 +374,10 @@ class EconomyModel(Model):
                 'Total Income': total_income
                 
             }
-            
-            
-            
+         
 
         )
-        # # 先に辞書を定義
-        # model_reporters_dict = {
-        #     **{"Firm_{}".format(i): lambda m, index=i+self.num_households: get_hire_workers_count(m, index) for i in range(num_firms)},
-        #     **{"Firm_capacity_{}".format(i): lambda m, index=i+self.num_households: get_total_capacity(m, index) for i in range(num_firms)}
-        # }
-
-        # self.datacollector1 = DataCollector(model_reporters=model_reporters_dict)
+        
 
 
         self.datacollector2 = DataCollector(
@@ -462,7 +449,7 @@ def get_total_capacity(m, index):
 
 # メインの実行部分
 num_households = 1000
-num_firms = 50
+num_firms = 100
 num_steps = 100
 num_simulations = 100  # シミュレーションの回数
 
@@ -472,136 +459,59 @@ all_median_wealths = []
 all_average_disposable_incomes = []
 all_median_disposable_incomes = []
 all_total_incomes = []
-all_average_wages_by_capacity = []
+all_average_wages_by_capacity = [{} for _ in range(num_steps)]
+all_normalized_wages_by_capacity = [{} for _ in range(num_steps)]
 
-# #一回の実行の場合
-model = EconomyModel(num_households, num_firms)
 
-for _ in range(num_steps):
-    model.step()
 
-data = model.datacollector1.get_model_vars_dataframe()
-plt.figure()   #新しいウィンドウを描画
-plt.plot(data.index, data['Average Household Wealth'], label='Average Wealth')
-plt.plot(data.index, data['Median Household Wealth'], label='Median Wealth')
-plt.xlabel('Steps')
-plt.ylabel('Wealth')
-plt.legend()
-plt.savefig("2_1.png")
-plt.figure()   #新しいウィンドウを描画
-plt.plot(data.index, data['Average Household disposable_income'], label='Average disposable_income')
-plt.plot(data.index, data['Median Household disposable_income'], label='Median disposable_income')
-plt.xlabel('Steps')
-plt.ylabel('disposable_income')
-plt.legend()
-plt.savefig("2_2.png")
 
-# data.plot()
-# plt.title('Number of Employees per Firm Over Time')
-# plt.ylabel('Number of Employees')
-# plt.xlabel('Steps')
-# plt.show()
-# シミュレーションが終了した後
-# agent_data = model.datacollector2.get_agent_vars_dataframe().reset_index()
+for sim in range(num_simulations):
+    model = EconomyModel(num_households, num_firms)
+    for _ in range(num_steps):
+        model.step()
 
-# production_capacityごとに賃金（wage）の平均を計算
-average_wages_by_capacity = {}
-for step, group_data in agent_data.groupby("Step"):
-    all_wages_by_capacity = {}
-    for capacity_wages in group_data["production_capacity_wages"]:
-        if capacity_wages is None:
-            continue  # Noneの場合はスキップ
-        for capacity, wage in capacity_wages:
-            if capacity not in all_wages_by_capacity:
-                all_wages_by_capacity[capacity] = []
-            all_wages_by_capacity[capacity].append(wage)
+    data = model.datacollector1.get_model_vars_dataframe()
+    all_average_wealths.append(data['Average Household Wealth'])
+    all_median_wealths.append(data['Median Household Wealth'])
+    all_average_disposable_incomes.append(data['Average Household disposable_income'])
+    all_median_disposable_incomes.append(data['Median Household disposable_income'])
+    all_total_incomes.append(data['Total Income'])
 
-    average_wages_by_capacity[step] = {capacity: statistics.mean(wages) for capacity, wages in all_wages_by_capacity.items()}
-plt.figure()   #新しいウィンドウを描画
-# 平均賃金をプロット
-for capacity in range(1, 6):  # 1から5までのproduction_capacityについて
-    plt.plot(
-        list(average_wages_by_capacity.keys()),
-        [step_data.get(capacity, None) for step_data in average_wages_by_capacity.values()],
-        label=f"Capacity {capacity}"
-    )
-plt.xlabel('Steps')
-plt.ylabel('wage')
-plt.legend()
-plt.savefig("2_3.png")
+    agent_data = model.datacollector2.get_agent_vars_dataframe().reset_index()
+    
+    average_wages_by_capacity = {}
+    for step, group_data in agent_data.groupby("Step"):
+        all_wages_by_capacity = {}
+        for capacity_wages in group_data["production_capacity_wages"]:
+            if capacity_wages is None:
+                continue
+            for capacity, wage in capacity_wages:
+                if capacity not in all_wages_by_capacity:
+                    all_wages_by_capacity[capacity] = []
+                all_wages_by_capacity[capacity].append(wage)
 
-total_incomes = data['Total Income']  # 総収入のデータを取得
-plt.figure()  # 新しいウィンドウを描画
-for capacity in range(1, 6):  # 1から5までのproduction_capacityについて
-    normalized_wages = []
+        average_wages_by_capacity[step] = {capacity: statistics.mean(wages) for capacity, wages in all_wages_by_capacity.items()}
+
+    total_incomes = data['Total Income']
     for step, step_total_income in enumerate(total_incomes):
-        average_wage_for_capacity = average_wages_by_capacity.get(step, {}).get(capacity, None)
-        if average_wage_for_capacity is None or step_total_income == 0:
-            normalized_wages.append(None)
-        else:
-            normalized_wages.append(average_wage_for_capacity / step_total_income)
+        for capacity in range(1, 6):
+            average_wage_for_capacity = average_wages_by_capacity.get(step, {}).get(capacity, None)
+            if average_wage_for_capacity is not None:
+                all_average_wages_by_capacity[step].setdefault(capacity, []).append(average_wage_for_capacity)
+                if step_total_income != 0:
+                    normalized_wage = average_wage_for_capacity / step_total_income
+                    all_normalized_wages_by_capacity[step].setdefault(capacity, []).append(normalized_wage)
 
-    plt.plot(
-        list(average_wages_by_capacity.keys()),
-        normalized_wages,
-        label=f"Capacity {capacity}"
-    )
+# 上記の結果を使用して平均を計算
+mean_average_wages_by_capacity = {step: {capacity: statistics.mean(wages) for capacity, wages in step_data.items()} for step, step_data in enumerate(all_average_wages_by_capacity)}
+mean_normalized_wages_by_capacity = {step: {capacity: statistics.mean(wages) for capacity, wages in step_data.items()} for step, step_data in enumerate(all_normalized_wages_by_capacity)}
 
-plt.xlabel('Steps')
-plt.ylabel('Normalized Wage')
-plt.legend()
-plt.savefig("2_4.png")
-plt.show()
-
-# for sim in range(num_simulations):
-#     model = EconomyModel(num_households, num_firms)
-#     for _ in range(num_steps):
-#         model.step()
-
-#     data = model.datacollector1.get_model_vars_dataframe()
-#     all_average_wealths.append(data['Average Household Wealth'])
-#     all_median_wealths.append(data['Median Household Wealth'])
-#     all_average_disposable_incomes.append(data['Average Household disposable_income'])
-#     all_median_disposable_incomes.append(data['Median Household disposable_income'])
-#     all_total_incomes.append(data['Total Income'])
-
-#     agent_data = model.datacollector2.get_agent_vars_dataframe().reset_index()
-    
-#     average_wages_by_capacity = {}
-#     for step, group_data in agent_data.groupby("Step"):
-#         all_wages_by_capacity = {}
-#         for capacity_wages in group_data["production_capacity_wages"]:
-#             if capacity_wages is None:
-#                 continue
-#             for capacity, wage in capacity_wages:
-#                 if capacity not in all_wages_by_capacity:
-#                     all_wages_by_capacity[capacity] = []
-#                 all_wages_by_capacity[capacity].append(wage)
-
-#         average_wages_by_capacity[step] = {capacity: statistics.mean(wages) for capacity, wages in all_wages_by_capacity.items()}
-    
-#     all_average_wages_by_capacity.append(average_wages_by_capacity)
-
-#     total_incomes = data['Total Income']
-#     normalized_wages_by_capacity = {}
-#     for step, step_total_income in enumerate(total_incomes):
-#         step_normalized_wages = {}
-#         for capacity in range(1, 6):
-#             average_wage_for_capacity = average_wages_by_capacity.get(step, {}).get(capacity, None)
-#             normalized_wage = None
-#             if average_wage_for_capacity is not None and step_total_income != 0:
-#                 normalized_wage = average_wage_for_capacity / step_total_income
-#             step_normalized_wages[capacity] = normalized_wage
-#         normalized_wages_by_capacity[step] = step_normalized_wages
-
-#     all_normalized_wages_by_capacity.append(normalized_wages_by_capacity)
-
-# # pandas の DataFrame を使用して平均を計算
-# average_wealth_df = pd.concat(all_average_wealths, axis=1).mean(axis=1)
-# median_wealth_df = pd.concat(all_median_wealths, axis=1).mean(axis=1)
-# average_disposable_income_df = pd.concat(all_average_disposable_incomes, axis=1).mean(axis=1)
-# median_disposable_income_df = pd.concat(all_median_disposable_incomes, axis=1).mean(axis=1)
-# total_income_df = pd.concat(all_total_incomes, axis=1).mean(axis=1)
+# pandas の DataFrame を使用して平均を計算
+average_wealth_df = pd.concat(all_average_wealths, axis=1).mean(axis=1)
+median_wealth_df = pd.concat(all_median_wealths, axis=1).mean(axis=1)
+average_disposable_income_df = pd.concat(all_average_disposable_incomes, axis=1).mean(axis=1)
+median_disposable_income_df = pd.concat(all_median_disposable_incomes, axis=1).mean(axis=1)
+total_income_df = pd.concat(all_total_incomes, axis=1).mean(axis=1)
 
 # # 平均値を計算
 # average_of_all_simulations = {}
@@ -609,57 +519,61 @@ plt.show()
 #     step_average = {}
 #     for capacity in range(1, 6):
 #         total_for_step_and_capacity = sum([sim[step].get(capacity, 0) for sim in all_average_wages_by_capacity if step in sim])
-#         step_average[capacity] = total_for_step_and_capacity / NUM_SIMULATIONS
+#         step_average[capacity] = total_for_step_and_capacity / num_simulations
 #     average_of_all_simulations[step] = step_average
 
 # average_normalized_of_all_simulations = {}
 # for step in range(num_steps):
 #     step_average = {}
 #     for capacity in range(1, 6):
-#         total_for_step_and_capacity = sum([sim[step].get(capacity, None) for sim in all_normalized_wages_by_capacity if step in sim])
-#         step_average[capacity] = total_for_step_and_capacity / NUM_SIMULATIONS
+#         total_for_step_and_capacity = sum([sim[step].get(capacity, 0) for sim in all_normalized_wages_by_capacity if step in sim])
+#         step_average[capacity] = total_for_step_and_capacity / num_simulations
 #     average_normalized_of_all_simulations[step] = step_average
 
-# # グラフをプロット
-# plt.figure()
-# plt.plot(average_wealth_df.index, average_wealth_df, label='Average Wealth')
-# plt.plot(median_wealth_df.index, median_wealth_df, label='Median Wealth')
-# plt.xlabel('Steps')
-# plt.ylabel('Wealth')
-# plt.legend()
-# plt.savefig("average_simulation_1_1.png")
+# グラフをプロット
+plt.figure()
+plt.plot(average_wealth_df.index, average_wealth_df, label='Average Wealth')
+plt.plot(median_wealth_df.index, median_wealth_df, label='Median Wealth')
+plt.ylim(0, 2500)
+plt.xlabel('Steps')
+plt.ylabel('Wealth')
+plt.legend()
+plt.savefig("D_1.png")
 
 
-# plt.figure()
-# plt.plot(average_disposable_income_df.index, average_disposable_income_df, label='Average disposable_income')
-# plt.plot(median_disposable_income_df.index, median_disposable_income_df, label='Median disposable_income')
-# plt.xlabel('Steps')
-# plt.ylabel('Disposable_Income')
-# plt.legend()
-# plt.savefig("average_simulation_1_2.png")
+plt.figure()
+plt.plot(average_disposable_income_df.index, average_disposable_income_df, label='Average disposable_income')
+plt.plot(median_disposable_income_df.index, median_disposable_income_df, label='Median disposable_income')
+plt.ylim(20, 60)
+plt.xlabel('Steps')
+plt.ylabel('Disposable_Income')
+plt.legend()
+plt.savefig("D_2.png")
 
 
-# plt.figure()
-# for capacity in range(1, 6): 
-#     plt.plot(
-#         list(average_of_all_simulations.keys()),
-#         [step_data.get(capacity, None) for step_data in average_of_all_simulations.values()],
-#         label=f"Capacity {capacity}"
-#     )
-# plt.xlabel('Steps')
-# plt.ylabel('Wage')
-# plt.legend()
-# plt.savefig("average_simulation_1_3.png")
-# plt.show()
+plt.figure()
+for capacity in range(1, 6):
+    plt.plot(
+        list(mean_average_wages_by_capacity.keys()),
+        [step_data.get(capacity, None) for step_data in mean_average_wages_by_capacity.values()],
+        label=f"Capacity {capacity}"
+    )
+plt.ylim(20, 100)
+plt.xlabel('Steps')
+plt.ylabel('Wage')
+plt.legend()
+plt.savefig("D_3.png")
 
-# plt.figure()
-# for capacity in range(1, 6):
-#     plt.plot(
-#         list(average_normalized_of_all_simulations.keys()),
-#         [step_data.get(capacity, None) for step_data in average_normalized_of_all_simulations.values()],
-#         label=f"Capacity {capacity}"
-#     )
-# plt.xlabel('Steps')
-# plt.ylabel('Normalized_Wage')
-# plt.legend()
-# plt.show()
+plt.figure()
+for capacity in range(1, 6):
+    plt.plot(
+        list(mean_normalized_wages_by_capacity.keys()),
+        [step_data.get(capacity, None) for step_data in mean_normalized_wages_by_capacity.values()],
+        label=f"Capacity {capacity}"
+    )
+plt.ylim(0.0007, 0.0019)
+plt.xlabel('Steps')
+plt.ylabel('Normalized_Wage')
+plt.legend()
+plt.savefig("D_4.png")
+plt.show()
