@@ -7,59 +7,156 @@ import statistics
 import matplotlib.pyplot as plt
 import pandas as pd
 
+class Worker:
+    def __init__(self, production_capacity, firm):
+        self.production_capacity = production_capacity  # 生産能力
+        self.firm = firm  # 働く先の企業エージェント
+        self.employed = False  # 雇用状態
+        self.wage = firm.fixed_wage
 
+ # 家計エージェントのクラス       
 class HouseholdAgent(Agent):
     """ 家計エージェントの詳細設計 """
-    def __init__(self, unique_id, model, wage, deposit_interest, tax_rate, gamma, delta, epsilon, price_list, employed_by=None):
+    def __init__(self, unique_id, model, deposit_interest):
         super().__init__(unique_id, model)
         # 初期パラメータ
-        self.cash = random.randint(3000, 5000)  # 初期現金
-        self.wage = wage  # 賃金
-       
+        self.total_population = random.randint(1, 5)  # 1から5人の世帯人数
+        
+        self.num_of_workers = random.randint(1, min(2 , self.total_population))  # 労働者の人数
+        if self.total_population - self.num_of_workers > 0:
+            self.num_of_retirees = random.randint(0, min(2, self.total_population - self.num_of_workers))  # 非労働者の人数．年金受給者
+        
+        else:
+            self.num_of_retirees = 0
+        self.num_of_non_workers = self.total_population - self.num_of_workers - self.num_of_retirees  # 残りはここでは子ども
+        # 各労働者エージェントは生産能力と働く企業エージェントを属性として持つ
+        self.workers = [Worker(random.randint(1, 5), None) for _ in range(self.num_of_workers)]
+        self.income = 0 #収入
+        self.disposable_income = 0 #可処分所得
+        self.consumption = 0 #消費
+        self.savings = random.randint(0, 50) #貯蓄額     
         self.deposit_interest = deposit_interest  # 預金利息
-        self.tax_rate = tax_rate  # 税率
-        self.basic_consumption = random.randint(1000, 1500)  # 基本消費
+        self.bc = random.randint(10, 15)  # 基本消費
         self.mpc = 0.5  # 限界消費性向
         self.wd = random.uniform(0.5, 0.8)  # 預金引き出し率
-        
-        self.gamma = gamma  # 労働意欲に影響するパラメータ
-        self.delta = delta
-        self.epsilon = epsilon
-        
-        self.income = 0  # 収入
         self.consumption_budget = 0  # 消費予算
-        self.consumption = 0  # 消費金額
-        self.work_motivation = 1  # 労働意欲
         self.products_purchased = []  # 購入する商品のリスト
         self.product_types = None  # 認識している商品タイプの数
-        self.savings = 0 #貯蓄額
-        self.employed_by = employed_by #この家計が雇用されている企業
+        
 
         """ 認識している商品タイプの決定 """
         n = np.random.randint(1, self.model.total_product_types + 1)
         self.product_types = np.random.choice(range(self.model.total_product_types), n, replace=False)
 
     def step(self):
+        self.consider_job_change()
+        self.calculate_disposable_income()
         self.calculate_income()
         self.calculate_consumption_budget()  
         self.decide_purchases()     
-        self.update_work_motivation()
+        self.savings += self.income - self.consumption
+        #ここに銀行に貯蓄を預けるプログラムを
         
+    # 高賃金の企業を探す：賃金が現在の企業よりも高い企業を探し、その中からランダムに1つ選ぶ
+    def find_higher_paying_job(self, worker):
+        higher_paying_jobs = [firm for firm in self.model.schedule.agents if isinstance(firm, FirmAgent) and firm.fixed_wage > worker.firm.fixed_wage and firm.job_openings > 0]
+        if higher_paying_jobs:
+            return random.choice(higher_paying_jobs)
+        else:
+            return None
+    
+    def find_job(self):
+        jobs = [firm for firm in self.model.schedule.agents if isinstance(firm, FirmAgent)  and firm.job_openings > 0]
+        if jobs:
+            return random.choice(jobs)
+        else:
+            return None
 
+    def should_consider_job_change(self, worker):
+        # 自身の生産能力が3以上であれば、20%の確率で転職を考慮
+        if worker.production_capacity == 5 and random.random() <= 0.3:
+            return True
+        if worker.production_capacity == 4 and random.random() <= 0.1:
+            return True
+        if worker.production_capacity == 3 and random.random() <= 0.05:
+            return True
+        
+        else:
+            return False
+
+    def should_seek_job(self, worker):
+        # 50%の確率で就職を考慮
+        if random.random() <= 0.5:
+            return True
+        else:
+            return False
+
+    def consider_job_change(self):
+        # 雇用されている労働者が転職を考慮する
+        for worker in self.workers:
+            if worker.employed:  # 労働者が現在雇用されている場合
+                if self.should_consider_job_change(worker):
+                    # print(worker.production_capacity)
+                    new_firm = self.find_higher_paying_job(worker)
+                    if new_firm is not None and new_firm != worker.firm:
+                        worker.firm.fire(worker)  # 以前の雇用者から離職
+                        worker.firm = new_firm  # 新しい雇用者に就職
+                        worker.employed = True  # 雇用状態を更新
+                        new_firm.job_openings -= 1
+
+            # 失業している労働者が仕事を探す
+            else:
+                if self.should_seek_job(worker):
+                    new_firm = self.find_job(worker)
+                    if new_firm is not None:
+                        worker.firm = new_firm  # 新しい雇用者に就職
+                        worker.employed = True  # 雇用状態を更新
+                        new_firm.job_openings -=1
+    
+    def calculate_wage_tax(self, wage):
+        if wage < 10:
+            tax_rate = 0.1
+        elif wage < 30:
+            tax_rate = 0.2
+        elif wage < 50:
+            tax_rate = 0.3
+        elif wage < 70:
+            tax_rate = 0.4
+        elif wage < 90:
+            tax_rate = 0.5
+        else:
+            tax_rate = 0.6
+        return wage * tax_rate 
+
+    def calculate_disposable_income(self): #可処分所得=合計賃金-税金
+        income_from_wages = 0
+        total_wage_tax = 0
+        for worker in self.workers:
+            if worker.firm is not None:
+                wage = worker.firm.wage
+                wage_tax = self.calculate_wage_tax(wage)
+                income_from_wages += (wage - wage_tax)
+                total_wage_tax += wage_tax
+        self.disposable_income = income_from_wages
+        # 税金を政府に納付
+        self.model.government.collect_wage_tax(total_wage_tax)
+        
+                    
+    # 収入の計算：労働者が働いている企業からの賃金、年金、政府からの社会保障の合計
     def calculate_income(self):
-        """ 収入計算 """
-        self.income = self.wage * (1 - self.tax_rate) + self.basic_income + self.deposit_interest
+        income_from_pensions = self.model.government.pensions(self.num_of_retirees) # 年金受給者からの年金
+        income_from_child_allowance = self.model.government.child_allowance(self.num_of_non_workers)  # 児童手当
+        income_from_unemployment_allowance = self.model.government.unemployment_allowance(sum(1 for worker in self.workers if worker.firm is None))  # 失業手当
+        income_from_BI = self.model.government.BI(self.total_population)  # BI       
+        self.income = self.disposable_income + income_from_pensions + income_from_child_allowance + income_from_unemployment_allowance + income_from_BI #+ self.deposit_interest # 合計収入
 
     def calculate_consumption_budget(self):
         """ 消費予算計算 """
-        self.consumption_budget = self.bc + (self.income - self.bc) * self.mpc + self.model.deposit_amount * self.wd
-
-    
-
+        self.consumption = self.bc + (self.income - self.bc) * self.mpc + self.savings * self.wd
         
     def decide_purchases(self):
         available_funds = self.consumption_budget
-        random.shuffle(self.product_types)
+        #random.shuffle(self.product_types)
         for product_type in self.product_types:
             # 提供する企業とその価格を取得（在庫がある企業のみ）
             firms_providing_product = [
@@ -82,12 +179,6 @@ class HouseholdAgent(Agent):
                 # 企業にお金を支払う
                 chosen_firm.receive_payment(price , product_type)
                 self.consumption +=price
-    
-    def update_work_motivation(self):
-        """ 労働意欲の更新 """
-        average_income = self.model.calculate_average_income()
-        income_difference = self.income - average_income
-        self.work_motivation = -self.epsilon / (self.delta + np.exp(-self.gamma * income_difference))
 
 
 
@@ -106,25 +197,41 @@ class FirmAgent(Agent):
         self.safety_factor = 1.65  # 安全在庫率
         self.bonus_rate = 0.5  # ボーナス率
         self.ti = 10 #期間数
+        self.sales_volume = {product_type: 0 for product_type in self.production_types} #販売量
+        self.production_volume = {product_type: 0 for product_type in self.production_types} #生産量
+        self.production_target= {product_type: 0 for product_type in self.production_types} #生産目標量
         self.sales_history = {product_type: [] for product_type in self.production_types} # 過去の販売量
         self.profit_history = {product_type: [] for product_type in self.production_types} # 過去の利益
         self.inventory = {product_type: 0 for product_type in self.production_types} # 在庫量
         self.sales = {product_type: 0 for product_type in self.production_types}  # 製品ごとの売上
-        self.labor_force = 0  # 労働力
-        self.sales_history = {product_type: 0 for product_type in self.production_types} # 過去の販売量
-        self.profit_history = {product_type: 0 for product_type in self.production_types} # 過去の利益
+        self.total_profit = []
         self.investment_amount = 500000  # 資本投資に必要な金額　
         self.investment_threshold = 20  # 投資決定のしきい値
         self.investment_flag = 0  # 投資フラグ変数
         self.company_funds = 100000  # 企業の自己資金
         self.bank_loan = 0  # 銀行からの長期ローン
-        self.fixed_wage = random.randint(4000, 5000)  # 固定賃金
+        self.fixed_wage = random.randint(20, 50)  # 固定賃金
+        #self.wage = 0 #ボーナスを含めた賃金
         # 商品ごとの価格を設定
         self.prices = {product_type: random.randint(100, 500) for product_type in self.production_types}
         self.product_cost = self.prices/2 # 製品の初期コスト
+        self.deficit_period = 0  # 連続赤字期間
+        self.hire_workers = []  # 雇用中の労働者リスト
+        self.debt = 0 #借金
+        self.firm_capacity = 0 #会社の生産能力
+        self.job_openings = random.randint(10, 100)  # 求人公開数
+        self.surplus_period = 0 #連続黒字期間
+        unemployed_workers = [worker for agent in self.model.schedule.agents if isinstance(agent, HouseholdAgent) for worker in agent.workers if not worker.employed]
+        
+
+        while self.job_openings > 0 and unemployed_workers:
+            # 雇う: ここでは簡単のため、無職の労働者から最初の人を雇うと仮定します
+            worker_to_hire = unemployed_workers.pop(0)
+            self.hire(worker_to_hire)
+            self.job_openings -= 1
 
     def step(self):
-        self.calculate_labor_force()
+        self.calculate_total_capacity()
         self.calculate_production_target()
         self.determine_production_volume()
         self.produce() 
@@ -134,11 +241,12 @@ class FirmAgent(Agent):
         self.calculate_wages()
         self.update_sales_history()
         self.calculate_profit()
+        self.update_fixed_wage_workers()
+        self.hire_or_fire()
 
-    def calculate_labor_force(self):
-        """ 労働力の計算 """
-        # 労働力は、所属する家計エージェントの労働意欲の合計で決定される
-        self.labor_force = sum([household.work_motivation for household in self.model.households if household.employed_by == self.unique_id])
+    def calculate_total_capacity(self):
+        """総生産能力を計算する"""
+        self.firm_capacity = sum(worker.production_capacity for worker in self.hire_workers )
 
     def calculate_production_target(self):
         """ 生産目標量の計算 """
@@ -162,7 +270,7 @@ class FirmAgent(Agent):
         for product_type in self.production_types:
             self.production_volume[product_type] = self.technical_skill[product_type] * \
                 (self.number_of_facilities[product_type] ** self.distribution_ratio) * \
-                (self.labor_force ** (1 - self.distribution_ratio))
+                (self.firm_capacity ** (1 - self.distribution_ratio))
     
     def produce(self):
         """ 製品の生産と在庫の更新 """
@@ -208,19 +316,15 @@ class FirmAgent(Agent):
             self.investment_flag = 0
 
     
-    def calculate_wages(self, profit_last_period):
+    def calculate_wages(self):
         """ 賃金の計算 """
-        self.total_fixed_salary = sum([self.fixed_wage for household in self.model.households if household.employed_by == self.unique_id])
-        self.total_bonus_base = sum([household.fixed_salary * household.work_motivation for household in self.model.households if household.employed_by == self.unique_id])
-
-        for household in self.model.households:
-            if household.employed_by == self.unique_id:
-                # 固定給の計算
-                fixed_salary = self.fixed_wage
-
-                # ボーナスの計算
-                bonus = (profit_last_period * self.bonus_rate) * (fixed_salary * household.work_motivation / total_bonus_base)
-                household.wage = fixed_salary + bonus
+        self.total_fixed_wage = sum([self.fixed_wage for _ in self.hire_workers])        
+        for hire_workers in self.hire_workers:
+            # ボーナスの計算
+            bonus = (self.total_profit[-1] * self.bonus_rate) * (hire_workers.production_capacity / self.firm_capacity)
+            hire_workers.wage = self.fixed_wage + bonus
+        
+        
     
     def receive_payment(self, amount, product_type):
         # 支払いを受け取り、販売量として記録
@@ -238,21 +342,69 @@ class FirmAgent(Agent):
     
     def calculate_profit(self):
         """ 利益の計算 """
+        current_period_profit = 0
         for product_type in self.production_types:
             sold_amount = self.sales_volume[product_type]
             cost = self.product_cost[product_type] * sold_amount
-            wages = self.calculate_wages(self.total_fixed_salary, self.total_bonus_base)  # 人件費の計算方法に応じて調整
+            wages = self.calculate_wages(self.total_fixed_wage, self.total_bonus_base)  # 人件費の計算方法に応じて調整
             profit = self.sales[product_type] - cost - wages
             self.profit_history[product_type].append(profit)
+            current_period_profit += profit
             # 利益を計算後、売上と売上量をリセット
             self.sales[product_type] = 0
             self.sales_volume[product_type] = 0
+        if current_period_profit > 0:
+            self.surplus_period += 1
+            self.deficit_period = 0
+        elif current_period_profit < 0:
+            self.deficit_period += 1
+            self.surplus_period = 0              
+        self.total_profit.append(current_period_profit)
             
 
-    # 人件費計算のメソッド（既に存在する場合は調整が必要です）
-    def calculate_wages(self , total_fixed_salary, total_bonus_base):
-        return (total_fixed_salary+total_bonus_base)/2
+    def update_fixed_wage_workers(self):
+        """ 固定給と労働者の人数の更新 """
+        if  self.surplus_period > 12:
+            self.fixed_wage = self.fixed_wage * 1.05
+            new_employee_count = int(len(self.hire_workers) * 1.1 )
+            self.job_openings = new_employee_count - self.job_openings
+        elif self.deficit_period > 12:
+            self.fixed_wage = self.fixed_wage * 0.95
+            new_employee_count = int(len(self.hire_workers) * 0.9 )
+            self.job_openings = new_employee_count - self.job_openings
+        #profit_change_rate = (current_period_profit - last_period_profit) / last_period_profit if last_period_profit != 0 else 0
+        # 新しい固定給を計算
+        #self.fixed_wage = self.fixed_wage * (1 + profit_change_rate)
+        # 新しい労働力の計算
+        #adjustment_factor = max(-0.1, min(profit_change_rate, 0.1))  # 例えば-10%から+10%の範囲で調整
+        #new_employee_count = int(len(self.hire_workers) * (1 + adjustment_factor))
+        #self.job_openings = new_employee_count - self.job_openings
+
+    def hire_or_fire(self):
+         """労働者を解雇する"""
+         while self.job_openings < 0 and self.hire_workers:
+         # 解雇: ここでは生産能力が最も低い労働者を解雇すると仮定します
+             worker_to_fire = min(self.hire_workers, key=lambda worker: worker.production_capacity)
+             self.fire(worker_to_fire)
+             self.job_openings += 1
+         
+
+    # 人件費計算（単純に人件費は商品にそれぞれ半分ずつかかっていると考える）
+    def calculate_wages(self , total_fixed_wage, total_bonus_base):
+        return (total_fixed_wage+total_bonus_base)/2
         
+    def hire(self, worker):
+        # 新たに労働者を雇う
+        self.hire_workers.append(worker)
+        worker.firm = self
+        worker.employed = True
+
+    def fire(self, worker):
+    # 労働者を解雇する
+        if worker in self.hire_workers:
+            self.hire_workers.remove(worker)
+            worker.firm = None
+            worker.employed = False
         
 
 
@@ -268,7 +420,7 @@ class GovernmentAgent(Agent):
         self.basic_income_rate = 0.4  # 基本所得率
         self.income_tax_rate = 0.2
         self.corporate_tax_rate = 0.4  # 税率
-        self.government_funds = 0  # 政府資金
+        self.government_funds = 1000000  # 政府資金
         self.spending = 0
 
     def step(self):
