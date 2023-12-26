@@ -17,7 +17,7 @@ class Worker:
  # 家計エージェントのクラス       
 class HouseholdAgent(Agent):
     """ 家計エージェントの詳細設計 """
-    def __init__(self, unique_id, model, deposit_interest):
+    def __init__(self, unique_id, model):
         super().__init__(unique_id, model)
         # 初期パラメータ
         self.total_population = random.randint(1, 5)  # 1から5人の世帯人数
@@ -35,7 +35,6 @@ class HouseholdAgent(Agent):
         self.disposable_income = 0 #可処分所得
         self.consumption = 0 #消費
         self.savings = random.randint(0, 50) #貯蓄額     
-        self.deposit_interest = deposit_interest  # 預金利息
         self.bc = random.randint(10, 15)  # 基本消費
         self.mpc = 0.5  # 限界消費性向
         self.wd = random.uniform(0.5, 0.8)  # 預金引き出し率
@@ -148,7 +147,7 @@ class HouseholdAgent(Agent):
         income_from_child_allowance = self.model.government.child_allowance(self.num_of_non_workers)  # 児童手当
         income_from_unemployment_allowance = self.model.government.unemployment_allowance(sum(1 for worker in self.workers if worker.firm is None))  # 失業手当
         income_from_BI = self.model.government.BI(self.total_population)  # BI       
-        self.income = self.disposable_income + income_from_pensions + income_from_child_allowance + income_from_unemployment_allowance + income_from_BI #+ self.deposit_interest # 合計収入
+        self.income = self.disposable_income + income_from_pensions + income_from_child_allowance + income_from_unemployment_allowance + income_from_BI 
 
     def calculate_consumption_budget(self):
         """ 消費予算計算 """
@@ -157,28 +156,29 @@ class HouseholdAgent(Agent):
     def decide_purchases(self):
         available_funds = self.consumption_budget
         #random.shuffle(self.product_types)
-        for product_type in self.product_types:
-            # 提供する企業とその価格を取得（在庫がある企業のみ）
-            firms_providing_product = [
-                (firm, firm.prices[product_type])
-                for firm in self.model.schedule.agents
-                if isinstance(firm, FirmAgent) and product_type in firm.production_types and firm.inventory[product_type] > 0
-            ]
+        while available_funds > 0:
+            for product_type in self.product_types:
+                # 提供する企業とその価格を取得（在庫がある企業のみ）
+                firms_providing_product = [
+                    (firm, firm.prices[product_type])
+                    for firm in self.model.schedule.agents
+                    if isinstance(firm, FirmAgent) and product_type in firm.production_types and firm.inventory[product_type] > 0
+                ]
 
-            if not firms_providing_product:
-                continue  # この商品を提供する企業がない場合はスキップ
+                if not firms_providing_product:
+                    continue  # この商品を提供する企業がない場合はスキップ
 
-            # 価格の安い上位30%からランダムに選択
-            firms_providing_product.sort(key=lambda x: x[1])  # 価格でソート
-            top_30_percent = firms_providing_product[:max(1, len(firms_providing_product) // 3)]  # 上位30%を取得
-            chosen_firm, price = random.choice(top_30_percent)
+                # 価格の安い上位30%からランダムに選択
+                firms_providing_product.sort(key=lambda x: x[1])  # 価格でソート
+                top_30_percent = firms_providing_product[:max(1, len(firms_providing_product) // 3)]  # 上位30%を取得
+                chosen_firm, price = random.choice(top_30_percent)
 
-            if available_funds >= price:
-                self.products_purchased.append(product_type)
-                available_funds -= price
-                # 企業にお金を支払う
-                chosen_firm.receive_payment(price , product_type)
-                self.consumption +=price
+                if available_funds >= price:
+                    self.products_purchased.append(product_type)
+                    available_funds -= price
+                    # 企業にお金を支払う
+                    chosen_firm.receive_payment(price ,1, product_type)
+                    self.consumption +=price
 
 
 
@@ -221,6 +221,7 @@ class FirmAgent(Agent):
         self.firm_capacity = 0 #会社の生産能力
         self.job_openings = random.randint(10, 100)  # 求人公開数
         self.surplus_period = 0 #連続黒字期間
+        self.debt_period = 0 #借金期間
         unemployed_workers = [worker for agent in self.model.schedule.agents if isinstance(agent, HouseholdAgent) for worker in agent.workers if not worker.employed]
         
 
@@ -306,14 +307,15 @@ class FirmAgent(Agent):
         """ 資本投資の実行 """
         if self.investment_flag > self.investment_threshold:
             # 資金調達
-            self.company_funds -= self.investment_amount / 2
-            self.bank_loan += self.investment_amount / 2
+            if self.nodel.bank.count_loan() < 2:
+                self.company_funds -= self.investment_amount / 2
+                self.bank_loan += self.model.bank.loan_borrow(self.investment_amount / 2)
 
-            # 施設数を増やして生産能力を向上
-            self.number_of_facilities += 1
+                # 施設数を増やして生産能力を向上
+                self.number_of_facilities += 1
 
-            # 投資フラグのリセット
-            self.investment_flag = 0
+                # 投資フラグのリセット
+                self.investment_flag = 0
 
     
     def calculate_wages(self):
@@ -326,14 +328,14 @@ class FirmAgent(Agent):
         
         
     
-    def receive_payment(self, amount, product_type):
+    def receive_payment(self, amount,number, product_type):
         # 支払いを受け取り、販売量として記録
         self.sales[product_type] += amount
         if product_type not in self.sales_history:
             self.sales_volume[product_type] = 0
-        self.sales_volume[product_type] += 1
+        self.sales_volume[product_type] += number
         # 在庫を減らす
-        self.inventory[product_type] -= 1
+        self.inventory[product_type] -= number
     
     def update_sales_history(self):
         # このステップでの販売量を記録
@@ -345,9 +347,10 @@ class FirmAgent(Agent):
         current_period_profit = 0
         for product_type in self.production_types:
             sold_amount = self.sales_volume[product_type]
+            tax = self.model.government.collect_taxes_firm(sold_amount)
             cost = self.product_cost[product_type] * sold_amount
             wages = self.calculate_wages(self.total_fixed_wage, self.total_bonus_base)  # 人件費の計算方法に応じて調整
-            profit = self.sales[product_type] - cost - wages
+            profit = self.sales[product_type] - cost - wages - tax
             self.profit_history[product_type].append(profit)
             current_period_profit += profit
             # 利益を計算後、売上と売上量をリセット
@@ -360,25 +363,19 @@ class FirmAgent(Agent):
             self.deficit_period += 1
             self.surplus_period = 0              
         self.total_profit.append(current_period_profit)
-            
+        self.company_funds += current_period_profit + self.model.goverment.calculate_firm_benefit() - self.model.bank.repay(self.debt)
+        self.debt = 0
 
     def update_fixed_wage_workers(self):
         """ 固定給と労働者の人数の更新 """
-        if  self.surplus_period > 12:
+        if  self.surplus_period > 6:
             self.fixed_wage = self.fixed_wage * 1.05
             new_employee_count = int(len(self.hire_workers) * 1.1 )
             self.job_openings = new_employee_count - self.job_openings
-        elif self.deficit_period > 12:
+        elif self.deficit_period > 6:
             self.fixed_wage = self.fixed_wage * 0.95
             new_employee_count = int(len(self.hire_workers) * 0.9 )
             self.job_openings = new_employee_count - self.job_openings
-        #profit_change_rate = (current_period_profit - last_period_profit) / last_period_profit if last_period_profit != 0 else 0
-        # 新しい固定給を計算
-        #self.fixed_wage = self.fixed_wage * (1 + profit_change_rate)
-        # 新しい労働力の計算
-        #adjustment_factor = max(-0.1, min(profit_change_rate, 0.1))  # 例えば-10%から+10%の範囲で調整
-        #new_employee_count = int(len(self.hire_workers) * (1 + adjustment_factor))
-        #self.job_openings = new_employee_count - self.job_openings
 
     def hire_or_fire(self):
          """労働者を解雇する"""
@@ -387,7 +384,24 @@ class FirmAgent(Agent):
              worker_to_fire = min(self.hire_workers, key=lambda worker: worker.production_capacity)
              self.fire(worker_to_fire)
              self.job_openings += 1
-         
+
+    def borrowing_decision(self): #借金．毎期返すため利子無し．
+        if self.company_funds < 0 :
+            amount_to_borrow = -self.company_funds  # 借入額はプラスの値でなければならない
+            self.debt = self.model.bank.borrow(amount_to_borrow)
+            self.company_funds = 0
+            self.debt_period += 1
+        else:
+            self.debt_period = 0
+        if self.bank_loan > 0:
+            self.bank_loan -= self.model.bank.loan_repayment()
+
+    
+    def bankruptcy(self):
+        if self.deficit_period > 100:
+            # 倒産する（全ての労働者を解雇する）
+            for worker in self.hire_workers:
+                self.fire(worker)
 
     # 人件費計算（単純に人件費は商品にそれぞれ半分ずつかかっていると考える）
     def calculate_wages(self , total_fixed_wage, total_bonus_base):
@@ -405,116 +419,172 @@ class FirmAgent(Agent):
             self.hire_workers.remove(worker)
             worker.firm = None
             worker.employed = False
-        
-
-
-# このクラスでは、企業エージェントの生産量の決定、価格の決定、資本投資の実行などの機能が含まれています。
-# 各機能は提供されたPDF文書に基づいて実装されており、エージェントベースの経済モデルの一部として機能します。
-
+ 
 
 class GovernmentAgent(Agent):
     """ 政府エージェント """
     def __init__(self, unique_id, model):
         super().__init__(unique_id, model)
-        self.subsidy_rate = 0.5  # 補助金率
-        self.basic_income_rate = 0.4  # 基本所得率
-        self.income_tax_rate = 0.2
-        self.corporate_tax_rate = 0.4  # 税率
+        self.pension_amount = 0 # 年金
+        self.child_allowance_amount = 0  # 児童手当
+        self.unemployment_allowance_amount = 0 # 失業手当
+        self.BI_amount = 8 # BI
+        self.total_amount = 0 #政府の税金での収入と支出．
+        self.total_amount_histry = [] #政府の税金での収入と支出の履歴．
         self.government_funds = 1000000  # 政府資金
-        self.spending = 0
+        self.tax_rate_firm = 0.3 #企業への税率
+        self.budget = 0
+        self.firm_benefits = 0
+        self.firms = [agent for agent in self.model.schedule.agents if isinstance(agent, FirmAgent)]
+       
 
+    def pensions(self, num_of_retirees):
+         # 年金受給者からの年金
+         self.total_amount -= self.pension_amount * num_of_retirees
+         return self.pension_amount * num_of_retirees
+
+        
+    def child_allowance(self,num_of_non_workers) :
+        # 児童手当
+        self.total_amount -= self.child_allowance_amount * num_of_non_workers
+        return self.child_allowance_amount * num_of_non_workers
+
+    def unemployment_allowance(self , num_of_unemployment) :
+        # 失業手当
+        self.total_amount -= self.unemployment_allowance_amount * num_of_unemployment
+        return self.unemployment_allowance_amount * num_of_unemployment
+        
+    def BI(self, total_population) : 
+        # BI
+        self.total_amount -= self.BI_amount * total_population
+        return self.BI_amount * total_population
+    
+    def calculate_firm_benefit(self):
+        benefit = self.firm_benefits / len(self.firms)
+        self.total_amount -= benefit
+        return benefit
+
+    
+    def collect_wage_tax(self, total_wage_tax):
+        self.total_amount += total_wage_tax
+
+    def collect_taxes_firm(self, sales):
+        self.total_amount += self.tax_rate_firm * sales
+        return self.tax_rate_firm * sales
+    
+    def determine_budget(self):
+        if self.total_amount > 0:
+            self.budget = self.total_amount/2
+            self.firm_benefits = self.total_amount/2
+        else:
+            self.budget = 0
+            self.firm_benefits = 0
+
+    
+    def purchase_goods(self):
+        """ 商品の購入 """        
+        random.shuffle(self.firms)  # 企業のリストをシャッフル
+        for firm in self.firms:            
+            for product_type in firm.production_types:
+                if firm.inventory[product_type] > 0 and self.budget >= firm.prices[product_type]:
+                    amount = min(firm.inventory[product_type], self.budget // firm.prices[product_type])
+                    purchase_cost = amount * firm.prices[product_type]
+                    firm.receive_payment(purchase_cost, amount, product_type)
+                    self.budget -= purchase_cost
+                    self.total_amount -= purchase_cost
+
+
+    def settlement_of_accounts(self):
+        self.total_amount_histry.append(self.total_amount)
+        self.government_funds += self.total_amount
+        self.total_amount = 0
+        
+    
     def step(self):
-        self.collect_taxes()
-        self.distribute_basic_income()
-        self.provide_subsidies()
-
-    def collect_taxes(self):
-        """ 税収の徴収 """
-        for agent in self.model.schedule.agents:
-            if isinstance(agent, (HouseholdAgent, FirmAgent)):
-                tax = agent.income * self.tax_rate
-                agent.income -= tax
-                self.government_funds += tax
-
-    def distribute_basic_income(self):
-        """ 基本所得の配布 """
-        total_households = sum(1 for a in self.model.schedule.agents if isinstance(a, HouseholdAgent))
-        basic_income = self.government_funds * self.basic_income_rate / total_households
-        for agent in self.model.schedule.agents:
-            if isinstance(agent, HouseholdAgent):
-                agent.income += basic_income
-
-    def provide_subsidies(self):
-        """ 補助金の提供 """
-        total_firms = sum(1 for a in self.model.schedule.agents if isinstance(a, FirmAgent))
-        subsidy = self.government_funds * self.subsidy_rate / total_firms
-        for agent in self.model.schedule.agents:
-            if isinstance(agent, FirmAgent):
-                agent.company_funds += subsidy
+        self.determine_budget()
+        self.purchase_goods()
+        self.settlement_of_accounts()
 
 class BankAgent(Agent):
     """ 銀行エージェント """
     def __init__(self, unique_id, model):
         super().__init__(unique_id, model)
-        self.deposits = 0
-        self.loans = 0
+        self.bank_found = 1000000
+        self.interest_rate = 0.0001
+        self.number_of_loan_firm = 0
+    
+    def count_loan(self):
+        self.number_of_loan_firm += 1
+        return self.number_of_loan_firm
 
-    def step(self):
-        self.collect_deposits()
-        self.issue_loans()
+#要検討
+    def deposit(self, savings):
+        self.bank_found += savings * (1 + self.interest_rate)
+        return savings * (1 + self.interest_rate) 
 
-    def collect_deposits(self):
-        # 預金のロジック
+    def borrow(self, amount_to_borrow):
+        self.bank_found -= amount_to_borrow
+        return amount_to_borrow
+    
+    def repay(self, debt) :
+        self.bank_found += debt 
+        return debt 
+    
+    def loan_borrow(self, loan):
+        self.bank_found -= loan
+        return loan
+    
+    def loan_repayment(self, loan):
         pass
 
-    def issue_loans(self):
-        # ローン発行のロジック
-        pass
+        
 
-class EquipmentMakerAgent(Agent):
-    """ 設備メーカーエージェント """
-    def __init__(self, unique_id, model):
-        super().__init__(unique_id, model)
-        self.production = 0
+# # class EquipmentMakerAgent(Agent):
+#     """ 設備メーカーエージェント """
+#     def __init__(self, unique_id, model):
+#         super().__init__(unique_id, model)
+#         self.production = 0
 
-    def step(self):
-        self.produce_equipment()
+#     def step(self):
+#         self.produce_equipment()
 
-    def produce_equipment(self):
-        # 設備生産のロジック
-        pass
+#     def produce_equipment(self):
+#         # 設備生産のロジック
+#         pass
 
 # モデルクラスの例
 class EconomicModel(Model):
-    def __init__(self, num_households, num_firms, num_governments, num_banks, num_equipment_makers):
+    def __init__(self, num_households, num_firms):
         self.schedule = RandomActivation(self)
-        # エージェントを生成し、スケジュールに追加
-        for i in range(num_households):
-            a = HouseholdAgent(i, self)
-            self.schedule.add(a)
-        for i in range(num_firms):
-            a = FirmAgent(i + num_households, self)
-            self.schedule.add(a)
-        # 政府、銀行、設備メーカーのエージェントも同様に追加
+                # エージェントの初期化
+        for i in range(self.num_households):
+            household = HouseholdAgent(i, self)
+            self.schedule.add(household)
+
+        for i in range(self.num_firms):
+            firm = FirmAgent(self.num_households+i, self)
+            self.schedule.add(firm)
+
+        self.government = GovernmentAgent(self.num_households + self.num_firms, self)
+        self.bank = BankAgent(self.num_households + self.num_firms + 1, self)
+        self.schedule.add(self.government)
+        self.schedule.add(self.bank)
 
     def step(self):
         self.schedule.step()
 
 
-    def update_price_list(self):
-        self.price_list = {}
-        for firm in self.schedule.agents:
-            if isinstance(firm, FirmAgent):
-                for product_type, price in firm.prices.items():
-                    if product_type not in self.price_list:
-                        self.price_list[product_type] = []
-                    self.price_list[product_type].append(price)
 
-# モデルを初期化し、シミュレーションを実行
-model = EconomicModel(50, 10, 1, 2, 3)  # 例: 50家計, 10企業, 1政府, 2銀行, 3設備メーカー
-for i in range(100):  # 100ステップ実行
-    model.step()
 
-# このコードは基本的な枠組みを提供していますが、各エージェントの詳細な行動や相互作用のロジックは
-# PDFドキュメントに基づいてさらに開発する必要があります。また、結果の収集や分析のためにDataCollector
-# などのMesaの
+# メインの実行部分
+num_households = 1000
+num_firms = 100
+num_steps = 100
+num_simulations = 1  # シミュレーションの回数
+
+for sim in range(num_simulations):
+    # モデルを初期化し、シミュレーションを実行
+    model = EconomicModel(num_households, num_firms)  
+    for i in range(num_steps):  
+        model.step()
+
