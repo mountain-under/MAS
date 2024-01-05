@@ -8,6 +8,7 @@ import matplotlib.pyplot as plt
 import pandas as pd
 
 
+
 class HouseholdAgent(Agent):
     """ 家計エージェントの詳細設計 """
     def __init__(self, unique_id, model, wage, deposit_interest, tax_rate, gamma, delta, epsilon, price_list, employed_by=None):

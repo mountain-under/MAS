@@ -209,7 +209,7 @@ class FirmAgent(Agent):
         self.investment_threshold = 20  # 投資決定のしきい値
         self.investment_flag = 0  # 投資フラグ変数
         self.company_funds = 100000  # 企業の自己資金
-        self.bank_loan = 0  # 銀行からの長期ローン
+        self.loans = []  # 複数のローンを管理するためのリスト
         self.fixed_wage = random.randint(20, 50)  # 固定賃金
         #self.wage = 0 #ボーナスを含めた賃金
         # 商品ごとの価格を設定
@@ -244,6 +244,7 @@ class FirmAgent(Agent):
         self.calculate_profit()
         self.update_fixed_wage_workers()
         self.hire_or_fire()
+        self.borrowing_decision()
 
     def calculate_total_capacity(self):
         """総生産能力を計算する"""
@@ -309,7 +310,9 @@ class FirmAgent(Agent):
             # 資金調達
             if self.nodel.bank.count_loan() < 2:
                 self.company_funds -= self.investment_amount / 2
-                self.bank_loan += self.model.bank.loan_borrow(self.investment_amount / 2)
+                bank_loan = self.model.bank.loan_borrow(self.investment_amount / 2)
+                loan = {'amount': bank_loan, 'remaining_payments': 100}
+                self.loans.append(loan)
 
                 # 施設数を増やして生産能力を向上
                 self.number_of_facilities += 1
@@ -387,14 +390,22 @@ class FirmAgent(Agent):
 
     def borrowing_decision(self): #借金．毎期返すため利子無し．
         if self.company_funds < 0 :
-            amount_to_borrow = -self.company_funds  # 借入額はプラスの値でなければならない
+            amount_to_borrow = -self.company_funds  
             self.debt = self.model.bank.borrow(amount_to_borrow)
             self.company_funds = 0
             self.debt_period += 1
         else:
             self.debt_period = 0
-        if self.bank_loan > 0:
-            self.bank_loan -= self.model.bank.loan_repayment()
+
+    def repay_loans(self):
+        """ ローンの返済 """
+        for loan in self.loans:
+            if loan['remaining_payments'] > 0:
+                monthly_payment = (loan['amount'] / loan['remaining_payments']) 
+                self.company_funds -= self.bank.loan_repayment(monthly_payment)
+                loan['remaining_payments'] -= 1
+                if loan['remaining_payments'] == 0:
+                    self.loans.remove(loan)    
 
     
     def bankruptcy(self):
@@ -509,33 +520,53 @@ class BankAgent(Agent):
     """ 銀行エージェント """
     def __init__(self, unique_id, model):
         super().__init__(unique_id, model)
-        self.bank_found = 1000000
+        self.bank_fund = 1000000
         self.interest_rate = 0.0001
+        self.loan_interest_rate = 0.01
         self.number_of_loan_firm = 0
+
+    def step(self):
+        self.collect_deposits()
+        
+        self.return_deposits_with_interest()
+        self.number_of_loan_firm = 0
+
+    def collect_deposits(self):
+        """ 預金の収集 """
+        for agent in self.model.schedule.agents:
+            if isinstance(agent, HouseholdAgent):
+                self.bank_fund += agent.savings
+                agent.savings = 0  # 家計の貯蓄を銀行に移動
+
+    def return_deposits_with_interest(self):
+        """ 利息付きで預金を返す """
+        for agent in self.model.schedule.agents:
+            if isinstance(agent, HouseholdAgent):
+                deposit_return = agent.savings * (1 + self.interest_rate)
+                agent.savings += deposit_return
+                self.bank_fund -= deposit_return
     
     def count_loan(self):
         self.number_of_loan_firm += 1
         return self.number_of_loan_firm
 
-#要検討
-    def deposit(self, savings):
-        self.bank_found += savings * (1 + self.interest_rate)
-        return savings * (1 + self.interest_rate) 
 
-    def borrow(self, amount_to_borrow):
-        self.bank_found -= amount_to_borrow
+    def borrow(self, amount_to_borrow): #短期ローン
+        self.bank_fund -= amount_to_borrow
         return amount_to_borrow
     
-    def repay(self, debt) :
-        self.bank_found += debt 
+    def repay(self, debt) : #短期ローン
+        self.bank_fund += debt 
         return debt 
     
-    def loan_borrow(self, loan):
-        self.bank_found -= loan
+    def loan_borrow(self, loan): #長期ローン
+        self.bank_fund -= loan
         return loan
     
-    def loan_repayment(self, loan):
-        pass
+    def loan_repayment(self, loan): #長期ローン
+        repayment = loan * (1 + self.loan_interest_rate)
+        self.bank_fund +=  repayment
+        return repayment
 
         
 
