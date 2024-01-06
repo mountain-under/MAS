@@ -12,7 +12,10 @@ class Worker:
         self.production_capacity = production_capacity  # 生産能力
         self.firm = firm  # 働く先の企業エージェント
         self.employed = False  # 雇用状態
-        self.wage = firm.fixed_wage
+        if firm is not None:
+            self.wage = firm.fixed_wage
+        else:
+            self.wage = 0  
 
  # 家計エージェントのクラス       
 class HouseholdAgent(Agent):
@@ -106,7 +109,7 @@ class HouseholdAgent(Agent):
             # 失業している労働者が仕事を探す
             else:
                 if self.should_seek_job(worker):
-                    new_firm = self.find_job(worker)
+                    new_firm = self.find_job()
                     if new_firm is not None:
                         worker.firm = new_firm  # 新しい雇用者に就職
                         worker.employed = True  # 雇用状態を更新
@@ -131,8 +134,8 @@ class HouseholdAgent(Agent):
         income_from_wages = 0
         total_wage_tax = 0
         for worker in self.workers:
-            if worker.firm is not None:
-                wage = worker.firm.wage
+            if worker.employed:
+                wage = worker.wage
                 wage_tax = self.calculate_wage_tax(wage)
                 income_from_wages += (wage - wage_tax)
                 total_wage_tax += wage_tax
@@ -214,7 +217,7 @@ class FirmAgent(Agent):
         #self.wage = 0 #ボーナスを含めた賃金
         # 商品ごとの価格を設定
         self.prices = {product_type: random.randint(100, 500) for product_type in self.production_types}
-        self.product_cost = self.prices/2 # 製品の初期コスト
+        self.product_cost = {product_type: price / 2 for product_type, price in self.prices.items()} # 製品の初期コスト
         self.deficit_period = 0  # 連続赤字期間
         self.hire_workers = []  # 雇用中の労働者リスト
         self.debt = 0 #借金
@@ -256,10 +259,12 @@ class FirmAgent(Agent):
         for product_type in self.production_types:
             # 過去の販売履歴がti期間未満の場合の処理を追加
             sales_history_length = len(self.sales_history[product_type])
-            periods_to_consider = min(self.ti, sales_history_length)
-            # 過去の販売量の平均を計算
-            average_sales = sum(self.sales_history[product_type][-periods_to_consider:]) / periods_to_consider
-            
+            if sales_history_length > 0:
+                periods_to_consider = min(self.ti, sales_history_length)
+                # 過去の販売量の平均を計算
+                average_sales = sum(self.sales_history[product_type][-periods_to_consider:]) / periods_to_consider
+            else:
+                average_sales = 0  
             # 安全在庫量を計算
             safety_stock = average_sales * self.safety_factor
 
@@ -283,13 +288,16 @@ class FirmAgent(Agent):
     def determine_pricing(self):
         """ 価格の決定 """
         for product_type in self.production_types:
-
-            # 在庫量と生産量の比率に基づいて価格を決定する
-            inventory_ratio = self.inventory[product_type] / self.production_volume[product_type]
-            if inventory_ratio < 0.2:
-                self.prices[product_type] *= 1.02  # 在庫比率が20%未満の場合、価格を2%引き上げる
-            elif inventory_ratio > 0.8:
-                self.prices[product_type] *= 0.98  # 在庫比率が80%以上の場合、価格を2%引き下げる
+            if self.production_volume[product_type] > 0:  # 分母がゼロではないことを確認
+                # 在庫量と生産量の比率に基づいて価格を決定する
+                inventory_ratio = self.inventory[product_type] / self.production_volume[product_type]
+                if inventory_ratio < 0.2:
+                    self.prices[product_type] *= 1.02  # 在庫比率が20%未満の場合、価格を2%引き上げる
+                elif inventory_ratio > 0.8:
+                    self.prices[product_type] *= 0.98  # 在庫比率が80%以上の場合、価格を2%引き下げる
+            else:
+                # 分母がゼロの場合の処理（例えば、価格を変更しないなど）
+                pass
 
             # 価格が製品の総コストを下回らないように調整
             if self.prices[product_type] < self.product_cost[product_type]:
@@ -323,11 +331,22 @@ class FirmAgent(Agent):
     
     def calculate_wages(self):
         """ 賃金の計算 """
-        self.total_fixed_wage = sum([self.fixed_wage for _ in self.hire_workers])        
-        for hire_workers in self.hire_workers:
-            # ボーナスの計算
-            bonus = (self.total_profit[-1] * self.bonus_rate) * (hire_workers.production_capacity / self.firm_capacity)
-            hire_workers.wage = self.fixed_wage + bonus
+        self.total_fixed_wage = sum([self.fixed_wage for _ in self.hire_workers])  
+        self.total_bonus_base = 0     
+        # self.total_profit が空でないか確認
+        if self.total_profit:
+            for hire_worker in self.hire_workers:
+                # ボーナスの計算
+                bonus = (self.total_profit[-1] * self.bonus_rate) * (hire_worker.production_capacity / self.firm_capacity)
+                self.total_bonus_base += bonus
+                hire_worker.wage = self.fixed_wage + bonus
+        else:
+            # self.total_profit が空の場合の処理
+            # 例: ボーナスなしで賃金を計算
+            for hire_worker in self.hire_workers:
+                hire_worker.wage = self.fixed_wage 
+        
+        
         
         
     
@@ -352,7 +371,7 @@ class FirmAgent(Agent):
             sold_amount = self.sales_volume[product_type]
             tax = self.model.government.collect_taxes_firm(sold_amount)
             cost = self.product_cost[product_type] * sold_amount
-            wages = self.calculate_wages(self.total_fixed_wage, self.total_bonus_base)  # 人件費の計算方法に応じて調整
+            wages = self.calculate_personnel_costs(self.total_fixed_wage, self.total_bonus_base)  # 人件費の計算方法に応じて調整
             profit = self.sales[product_type] - cost - wages - tax
             self.profit_history[product_type].append(profit)
             current_period_profit += profit
@@ -366,7 +385,7 @@ class FirmAgent(Agent):
             self.deficit_period += 1
             self.surplus_period = 0              
         self.total_profit.append(current_period_profit)
-        self.company_funds += current_period_profit + self.model.goverment.calculate_firm_benefit() - self.model.bank.repay(self.debt)
+        self.company_funds += current_period_profit + self.model.government.calculate_firm_benefit() - self.model.bank.repay(self.debt)
         self.debt = 0
 
     def update_fixed_wage_workers(self):
@@ -415,7 +434,7 @@ class FirmAgent(Agent):
                 self.fire(worker)
 
     # 人件費計算（単純に人件費は商品にそれぞれ半分ずつかかっていると考える）
-    def calculate_wages(self , total_fixed_wage, total_bonus_base):
+    def calculate_personnel_costs(self , total_fixed_wage, total_bonus_base):
         return (total_fixed_wage+total_bonus_base)/2
         
     def hire(self, worker):
@@ -587,6 +606,9 @@ class BankAgent(Agent):
 class EconomicModel(Model):
     def __init__(self, num_households, num_firms):
         self.schedule = RandomActivation(self)
+        self.num_households = num_households  
+        self.num_firms = num_firms 
+        self.total_product_types = 10  # 商品タイプの総数
                 # エージェントの初期化
         for i in range(self.num_households):
             household = HouseholdAgent(i, self)
@@ -602,8 +624,20 @@ class EconomicModel(Model):
         self.schedule.add(self.bank)
 
     def step(self):
-        self.schedule.step()
+        # 政府エージェントと銀行エージェント以外のすべてのエージェントのステップを実行
+        for agent in self.schedule.agents:
+            if not isinstance(agent, GovernmentAgent) and not isinstance(agent, BankAgent):
+                agent.step()
 
+        # 政府エージェントのステップを実行
+        for agent in self.schedule.agents:
+            if isinstance(agent, GovernmentAgent):
+                agent.step()
+
+        # 銀行エージェントのステップを実行
+        for agent in self.schedule.agents:
+            if isinstance(agent, BankAgent):
+                agent.step()
 
 
 
