@@ -6,6 +6,7 @@ import numpy as np
 import statistics
 import matplotlib.pyplot as plt
 import pandas as pd
+from collections import defaultdict
 
 class Worker:
     def __init__(self, production_capacity, firm):
@@ -151,12 +152,14 @@ class HouseholdAgent(Agent):
 
     def calculate_consumption_budget(self):
         """ 消費予算計算 """
-        self.consumption = self.bc + (self.income - self.bc) * self.mpc + self.savings * self.wd
+        self.consumption_budget = self.bc + (self.income - self.bc) * self.mpc + self.savings * self.wd
+        self.consumption = 0
         
     def decide_purchases(self):
         available_funds = self.consumption_budget
-        #random.shuffle(self.product_types)
+        random.shuffle(self.product_types)
         while available_funds > 0:
+            made_purchase = False
             for product_type in self.product_types:
                 # 提供する企業とその価格を取得（在庫がある企業のみ）
                 firms_providing_product = [
@@ -179,6 +182,11 @@ class HouseholdAgent(Agent):
                     # 企業にお金を支払う
                     chosen_firm.receive_payment(price ,1, product_type)
                     self.consumption +=price
+                    made_purchase = True  # 購入が行われたのでフラグを更新
+                
+            if not made_purchase:
+                break  # このループで購入がなかった場合はループを抜ける
+        print(available_funds)
 
 
 
@@ -197,13 +205,18 @@ class FirmAgent(Agent):
         self.safety_factor = 1.65  # 安全在庫率
         self.bonus_rate = 0.5  # ボーナス率
         self.ti = 10 #期間数
-        self.sales_volume = {product_type: 0 for product_type in self.production_types} #販売量
-        self.production_volume = {product_type: 0 for product_type in self.production_types} #生産量
-        self.production_target= {product_type: 0 for product_type in self.production_types} #生産目標量
-        self.sales_volume_history = {product_type: [] for product_type in self.production_types} # 過去の販売量
-        self.profit_history = {product_type: [] for product_type in self.production_types} # 過去の利益
-        self.inventory = {product_type: 0 for product_type in self.production_types} # 在庫量
+        self.sales_quantity = {product_type: 0 for product_type in self.production_types} #販売量
+        self.sales_quantity_history = {product_type: [] for product_type in self.production_types} # 過去の販売量
+        self.production_quantity = {product_type: 0 for product_type in self.production_types} #生産量
+        self.production_quantity_history = {product_type: [] for product_type in self.production_types}
         self.sales = {product_type: 0 for product_type in self.production_types}  # 製品ごとの売上
+        self.sales_history = {product_type: [] for product_type in self.production_types}
+        self.production_target= {product_type: 0 for product_type in self.production_types} #生産目標量
+        self.production_target_history = {product_type: [] for product_type in self.production_types}
+        self.profit_history = {product_type: [] for product_type in self.production_types} # 過去の利益
+        self.inventory = {product_type: 100 for product_type in self.production_types} # 在庫量
+        self.inventory_history = {product_type: [] for product_type in self.production_types}
+        
         self.total_profit = []
         self.investment_cost = 5000  # 資本投資に必要な金額
         self.investment_amount = 0
@@ -211,10 +224,10 @@ class FirmAgent(Agent):
         self.investment_flag = {product_type: 0 for product_type in self.production_types}  # 投資フラグ変数
         self.company_funds = 10000  # 企業の自己資金
         self.loans = []  # 複数のローンを管理するためのリスト
-        self.fixed_wage = random.randint(100, 500)  # 固定賃金
+        self.fixed_wage = random.randint(150, 500)  # 固定賃金
         #self.wage = 0 #ボーナスを含めた賃金
         # 商品ごとの価格を設定
-        self.prices = {product_type: random.randint(10, 50) for product_type in self.production_types}
+        self.prices = {product_type: random.randint(15, 50) for product_type in self.production_types}
         self.product_cost = {product_type: price / 5 for product_type, price in self.prices.items()} # 製品の初期コスト
         self.deficit_period = 0  # 連続赤字期間
         self.hire_workers = []  # 雇用中の労働者リスト
@@ -231,7 +244,6 @@ class FirmAgent(Agent):
             worker_to_hire = unemployed_workers.pop(0)
             self.hire(worker_to_hire)
             self.job_openings -= 1
-        print(f"Firm {self.unique_id} Workers: {len(self.hire_workers)}")
         
 
 
@@ -239,13 +251,13 @@ class FirmAgent(Agent):
         self.investment_amount = 0
         self.calculate_total_capacity()
         self.calculate_production_target()
-        self.determine_production_volume()
+        self.determine_production_quantity()
         self.produce() 
         self.determine_pricing()
         self.update_investment_flag()
         self.make_capital_investment()
         self.calculate_wages()
-        self.update_sales_volume_history()
+        self.update_firm_history()
         self.calculate_profit()
         self.update_fixed_wage_workers()
         self.hire_or_fire()
@@ -260,24 +272,24 @@ class FirmAgent(Agent):
         # 過去 ti 期間の販売量の平均を計算
         for product_type in self.production_types:
             # 過去の販売履歴がti期間未満の場合の処理を追加
-            sales_volume_history_length = len(self.sales_volume_history[product_type])
-            if sales_volume_history_length > 0:
-                periods_to_consider = min(self.ti, sales_volume_history_length)
+            sales_quantity_history_length = len(self.sales_quantity_history[product_type])
+            if sales_quantity_history_length > 0:
+                periods_to_consider = min(self.ti, sales_quantity_history_length)
                 # 過去の販売量の平均を計算
-                average_sales_volume = sum(self.sales_volume_history[product_type][-periods_to_consider:]) / periods_to_consider
+                average_sales_quantity = sum(self.sales_quantity_history[product_type][-periods_to_consider:]) / periods_to_consider
             else:
-                average_sales_volume = 0  
+                average_sales_quantity = 0  
             # 安全在庫量を計算
-            safety_stock = average_sales_volume * self.safety_factor
+            safety_stock = average_sales_quantity * self.safety_factor
 
             # 生産目標量を計算
-            self.production_target[product_type] = average_sales_volume + safety_stock - (self.inventory[product_type] / 2)
+            self.production_target[product_type] = average_sales_quantity + safety_stock - (self.inventory[product_type] / 2)
 
-    def determine_production_volume(self):
+    def determine_production_quantity(self):
         """ 生産量の決定 """
         # 生産量は、Cobb-Douglas生産関数に基づいて決定される
         for product_type in self.production_types:
-            self.production_volume[product_type] = self.technical_skill[product_type] * \
+            self.production_quantity[product_type] = self.technical_skill[product_type] * \
                 (self.number_of_facilities[product_type] ** self.distribution_ratio) * \
                 (self.firm_capacity ** (1 - self.distribution_ratio))
     
@@ -285,14 +297,14 @@ class FirmAgent(Agent):
         """ 製品の生産と在庫の更新 """
         for product_type in self.production_types:
             # 生産量に基づいて製品を生産し、在庫に追加
-            self.inventory[product_type] += self.production_volume[product_type]
+            self.inventory[product_type] += self.production_quantity[product_type]
 
     def determine_pricing(self):
         """ 価格の決定 """
         for product_type in self.production_types:
-            if self.production_volume[product_type] > 0:  # 分母がゼロではないことを確認
+            if self.production_quantity[product_type] > 0:  # 分母がゼロではないことを確認
                 # 在庫量と生産量の比率に基づいて価格を決定する
-                inventory_ratio = self.inventory[product_type] / self.production_volume[product_type]
+                inventory_ratio = self.inventory[product_type] / self.production_quantity[product_type]
                 if inventory_ratio < 0.2:
                     self.prices[product_type] *= 1.02  # 在庫比率が20%未満の場合、価格を2%引き上げる
                 elif inventory_ratio > 0.8:
@@ -308,7 +320,7 @@ class FirmAgent(Agent):
     def update_investment_flag(self):
         """ 投資フラグの更新 """
         for product_type in self.production_types:
-            if self.production_target[product_type] > self.production_volume[product_type]:
+            if self.production_target[product_type] > self.production_quantity[product_type]:
                 self.investment_flag[product_type] += 1  # 生産目標が生産上限を超えた場合、投資フラグを増やす
             elif self.production_target[product_type] < self.inventory[product_type]:
                 self.investment_flag[product_type] -= 1  # 生産目標が在庫を下回った場合、投資フラグを減らす
@@ -321,7 +333,7 @@ class FirmAgent(Agent):
         for product_type in self.production_types:
             if self.investment_flag[product_type] > self.investment_threshold:
                 # 資金調達
-                if self.model.bank.count_loan() < 2:
+                if self.model.bank.count_loan() < 5:
                     self.investment_amount += self.investment_cost
                     self.company_funds -= self.investment_cost / 2
                     bank_loan = self.model.bank.loan_borrow(self.investment_cost / 2)
@@ -340,12 +352,13 @@ class FirmAgent(Agent):
         self.total_fixed_wage = sum([self.fixed_wage for _ in self.hire_workers])  
         self.total_bonus_base = 0     
         # self.total_profit が空でないか確認
-        if self.total_profit:
-            for hire_worker in self.hire_workers:
-                # ボーナスの計算
-                bonus = (self.total_profit[-1] * self.bonus_rate) * (hire_worker.production_capacity / self.firm_capacity)
-                self.total_bonus_base += bonus
-                hire_worker.wage = self.fixed_wage + bonus
+        if  self.total_profit:
+            if self.total_profit[-1] > 0:
+                for hire_worker in self.hire_workers:
+                    # ボーナスの計算               
+                    bonus = (self.total_profit[-1] * self.bonus_rate) * (hire_worker.production_capacity / self.firm_capacity)
+                    self.total_bonus_base += bonus
+                    hire_worker.wage = self.fixed_wage + bonus
         else:
             # self.total_profit が空の場合の処理
             # 例: ボーナスなしで賃金を計算
@@ -359,22 +372,26 @@ class FirmAgent(Agent):
     def receive_payment(self, amount,number, product_type):
         # 支払いを受け取り、販売量として記録
         self.sales[product_type] += amount
-        if product_type not in self.sales_volume_history:
-            self.sales_volume[product_type] = 0
-        self.sales_volume[product_type] += number
+        if product_type not in self.sales_quantity_history:
+            self.sales_quantity[product_type] = 0
+        self.sales_quantity[product_type] += number
         # 在庫を減らす
         self.inventory[product_type] -= number
     
-    def update_sales_volume_history(self):
-        # このステップでの販売量を記録
+    def update_firm_history(self):
+        # このステップでの推移を記録
         for product_type in self.production_types:
-            self.sales_volume_history[product_type].append(self.sales_volume[product_type])
+            self.sales_quantity_history[product_type].append(self.sales_quantity[product_type])
+            self.sales_history[product_type].append(self.sales[product_type])
+            self.production_quantity_history[product_type].append(self.production_quantity[product_type])
+            self.production_target_history[product_type].append(self.production_target[product_type])
+            self.inventory_history[product_type].append(self.inventory[product_type])
     
     def calculate_profit(self):
         """ 利益の計算 """
         current_period_profit = 0
         for product_type in self.production_types:
-            sold_amount = self.sales_volume[product_type]
+            sold_amount = self.sales_quantity[product_type]
             tax = self.model.government.collect_taxes_firm(self.sales[product_type])
             cost = self.product_cost[product_type] * sold_amount
             wages = self.calculate_personnel_costs(self.total_fixed_wage, self.total_bonus_base)  # 人件費の計算方法に応じて調整
@@ -383,7 +400,8 @@ class FirmAgent(Agent):
             current_period_profit += profit
             # 利益を計算後、売上と売上量をリセット
             self.sales[product_type] = 0
-            self.sales_volume[product_type] = 0
+            self.sales_quantity[product_type] = 0
+        current_period_profit += self.model.government.calculate_firm_benefit() - self.model.bank.repay(self.debt)
         if current_period_profit > 0:
             self.surplus_period += 1
             self.deficit_period = 0
@@ -391,16 +409,16 @@ class FirmAgent(Agent):
             self.deficit_period += 1
             self.surplus_period = 0              
         self.total_profit.append(current_period_profit)
-        self.company_funds += current_period_profit + self.model.government.calculate_firm_benefit() - self.model.bank.repay(self.debt)
+        self.company_funds += current_period_profit 
         self.debt = 0
 
     def update_fixed_wage_workers(self):
         """ 固定給と労働者の人数の更新 """
-        if  self.surplus_period % 6 == 0:
+        if  self.surplus_period != 0 and self.surplus_period % 3 == 0:
             self.fixed_wage = self.fixed_wage * 1.05
             new_employee_count = int(len(self.hire_workers) * 1.1 )
             self.job_openings = new_employee_count - len(self.hire_workers)
-        elif self.deficit_period % 6 == 0:
+        elif self.debt_period != 0 and self.deficit_period % 18 == 0:
             self.fixed_wage = self.fixed_wage * 0.95
             new_employee_count = int(len(self.hire_workers) * 0.9 )
             self.job_openings = new_employee_count - len(self.hire_workers)
@@ -464,7 +482,7 @@ class GovernmentAgent(Agent):
         self.pension_amount = 0 # 年金
         self.child_allowance_amount = 0  # 児童手当
         self.unemployment_allowance_amount = 0 # 失業手当
-        self.BI_amount = 8 # BI
+        self.BI_amount = 0 # BI
         self.government_income = 0 #政府の税金での収入．
         self.government_spending = 0 #政府の税金での支出．
         self.total_amount = 0
@@ -625,6 +643,7 @@ class EconomicModel(Model):
         self.gdp_histry = []
         self.worker_count_history = []
         self.job_openings_history = []
+        self.employment_rate_history_by_capacity = defaultdict(list)
                 # エージェントの初期化
         for i in range(self.num_households):
             household = HouseholdAgent(i, self)
@@ -652,7 +671,11 @@ class EconomicModel(Model):
     def step(self):
         # 政府エージェントと銀行エージェント以外のすべてのエージェントのステップを実行
         for agent in self.schedule.agents:
-            if not isinstance(agent, GovernmentAgent) and not isinstance(agent, BankAgent):
+            if isinstance(agent, HouseholdAgent):
+                agent.step()
+        
+        for agent in self.schedule.agents:
+            if isinstance(agent, FirmAgent):
                 agent.step()
 
         # 政府エージェントのステップを実行
@@ -672,13 +695,30 @@ class EconomicModel(Model):
         current_job_openings = {firm.unique_id: firm.job_openings for firm in self.schedule.agents if isinstance(firm, FirmAgent)}
         self.job_openings_history.append(current_job_openings)
         self.worker_count_history.append(current_worker_counts)
+        # 生産能力ごとの労働者数と雇用されている労働者の数を集計
+        worker_count_by_capacity = defaultdict(lambda: {'total': 0, 'employed': 0})
+        for agent in self.schedule.agents:
+            if isinstance(agent, HouseholdAgent):
+                for worker in agent.workers:
+                    capacity = worker.production_capacity
+                    worker_count_by_capacity[capacity]['total'] += 1
+                    if worker.employed:
+                        worker_count_by_capacity[capacity]['employed'] += 1
+
+        # 生産能力ごとの雇用率を計算して記録
+        for capacity, counts in worker_count_by_capacity.items():
+            if counts['total'] > 0:
+                employment_rate = counts['employed'] / counts['total']
+            else:
+                employment_rate = 0
+            self.employment_rate_history_by_capacity[capacity].append(employment_rate)
         
 
 
 
 
 # メインの実行部分
-num_households = 500
+num_households = 300
 num_firms = 10
 num_steps = 100
 num_simulations = 1  # シミュレーションの回数
@@ -689,65 +729,142 @@ for sim in range(num_simulations):
     for i in range(num_steps):  
         model.step()
 
+# 企業を5つずつのグループに分割
+firm_agents = [agent for agent in model.schedule.agents if isinstance(agent, FirmAgent)]
+num_firms_per_plot = 5
+num_plots = np.ceil(len(firm_agents) / num_firms_per_plot)
+
+import os
+dirname = "dir003/"
+os.makedirs(dirname, exist_ok=True)
+
+# 売上履歴
+for i in range(int(num_plots)):
+    plt.figure(figsize=(12, 6))
+    for firm in firm_agents[i*num_firms_per_plot:(i+1)*num_firms_per_plot]:
+        for product_type, sales in firm.sales_history.items():
+            plt.plot(sales, label=f'Sales of Product {product_type} by Firm {firm.unique_id - num_households + 1}')
+    plt.xlabel('Steps')
+    plt.ylabel('Sales')
+    plt.title(f'Sales History of Products by Firms {i*num_firms_per_plot+1} to {(i+1)*num_firms_per_plot}')
+    plt.legend(loc='center left', bbox_to_anchor=(1, 0.5))
+    plt.savefig(dirname + f'sales_history_firms_{i*num_firms_per_plot+1}_to_{(i+1)*num_firms_per_plot}.png', bbox_inches='tight')
+    plt.close()
+
+# 生産量履歴のプロット
+for i in range(int(num_plots)):
+    plt.figure(figsize=(12, 6))
+    for firm in firm_agents[i*num_firms_per_plot:(i+1)*num_firms_per_plot]:
+        for product_type, production_quantity in firm.production_quantity_history.items():
+            plt.plot(production_quantity, label=f'production_quantity of Product {product_type} by Firm {firm.unique_id - num_households + 1}')
+    plt.xlabel('Steps')
+    plt.ylabel('Production_quantity')
+    plt.title(f'production_quantity History of Products by Firms {i*num_firms_per_plot+1} to {(i+1)*num_firms_per_plot}')
+    plt.legend(loc='center left', bbox_to_anchor=(1, 0.5))
+    plt.savefig(dirname + f'production_quantity_history_firms_{i*num_firms_per_plot+1}_to_{(i+1)*num_firms_per_plot}.png', bbox_inches='tight')
+    plt.close()
+
+# 販売量履歴
+for i in range(int(num_plots)):
+    plt.figure(figsize=(12, 6))
+    for firm in firm_agents[i*num_firms_per_plot:(i+1)*num_firms_per_plot]:
+        for product_type, sales_quantity in firm.sales_quantity_history.items():
+            plt.plot(sales_quantity, label=f'sales_quantity of Product {product_type} by Firm {firm.unique_id - num_households + 1}')
+    plt.xlabel('Steps')
+    plt.ylabel('Sales_quantity')
+    plt.title(f'sales_quantity History of Products by Firms {i*num_firms_per_plot+1} to {(i+1)*num_firms_per_plot}')
+    plt.legend(loc='center left', bbox_to_anchor=(1, 0.5))
+    plt.savefig(dirname + f'sales_quantity_history_firms_{i*num_firms_per_plot+1}_to_{(i+1)*num_firms_per_plot}.png', bbox_inches='tight')
+    plt.close()
+
+# 利益履歴
+for i in range(int(num_plots)):
+    plt.figure(figsize=(12, 6))
+    for firm in firm_agents[i*num_firms_per_plot:(i+1)*num_firms_per_plot]:
+        for product_type, profit in firm.profit_history.items():
+            plt.plot(profit, label=f'profit of Product {product_type} by Firm {firm.unique_id - num_households + 1}')
+    plt.xlabel('Steps')
+    plt.ylabel('Profit')
+    plt.title(f'profit History of Products by Firms {i*num_firms_per_plot+1} to {(i+1)*num_firms_per_plot}')
+    plt.legend(loc='center left', bbox_to_anchor=(1, 0.5))
+    plt.savefig(dirname + f'profit_history_firms_{i*num_firms_per_plot+1}_to_{(i+1)*num_firms_per_plot}.png', bbox_inches='tight')
+    plt.close()
+
+#生産目標履歴
+for i in range(int(num_plots)):
+    plt.figure(figsize=(12, 6))
+    for firm in firm_agents[i*num_firms_per_plot:(i+1)*num_firms_per_plot]:
+        for product_type, production_target in firm.production_target_history.items():
+            plt.plot(production_target, label=f'production_target of Product {product_type} by Firm {firm.unique_id - num_households + 1}')
+    plt.xlabel('Steps')
+    plt.ylabel('Production_target')
+    plt.title(f'production_target History of Products by Firms {i*num_firms_per_plot+1} to {(i+1)*num_firms_per_plot}')
+    plt.legend(loc='center left', bbox_to_anchor=(1, 0.5))
+    plt.savefig(dirname + f'production_target_history_firms_{i*num_firms_per_plot+1}_to_{(i+1)*num_firms_per_plot}.png', bbox_inches='tight')
+    plt.close()
+
+#在庫履歴
+for i in range(int(num_plots)):
+    plt.figure(figsize=(12, 6))
+    for firm in firm_agents[i*num_firms_per_plot:(i+1)*num_firms_per_plot]:
+        for product_type, inventory in firm.inventory_history.items():
+            plt.plot(inventory, label=f'inventory of Product {product_type} by Firm {firm.unique_id - num_households + 1}')
+    plt.xlabel('Steps')
+    plt.ylabel('Inventory')
+    plt.title(f'inventory History of Products by Firms {i*num_firms_per_plot+1} to {(i+1)*num_firms_per_plot}')
+    plt.legend(loc='center left', bbox_to_anchor=(1, 0.5))
+    plt.savefig(dirname + f'inventory_history_firms_{i*num_firms_per_plot+1}_to_{(i+1)*num_firms_per_plot}.png', bbox_inches='tight')
+    plt.close()
+
+#企業ごとの労働者の推移
 plt.figure()
 for firm_id in range(num_firms):
     worker_counts = [step[num_households+firm_id] for step in model.worker_count_history]
-    plt.plot(worker_counts, label=f'Firm {firm_id}')
+    plt.plot(worker_counts, label=f'Firm {firm_id + 1}')
 plt.xlabel('Steps')
 plt.ylabel('Number of Workers')
-plt.legend()
+plt.title('Number of Workers by Firms')
+plt.legend(loc='center left', bbox_to_anchor=(1, 0.5))
+plt.savefig(dirname + f'number_of_Workers_history.png', bbox_inches='tight')
+plt.close()
+
+#雇用率の履歴
+plt.figure()
+for capacity, rates in model.employment_rate_history_by_capacity.items():
+    plt.plot(rates, label=f'Capacity {capacity}')
+plt.xlabel('Steps')
+plt.ylabel('Employment Rate')
+plt.title('Employment Rate by Production Capacity')
+plt.legend(loc='center left', bbox_to_anchor=(1, 0.5))
+plt.savefig(dirname + f'employment_rate_history.png', bbox_inches='tight')
+plt.close()
 
 plt.figure()
 for firm_id in range(num_firms):
     job_openings = [step[num_households+firm_id] for step in model.job_openings_history]
-    plt.plot(job_openings, label=f'Firm {firm_id}')
+    plt.plot(job_openings, label=f'Firm {firm_id + 1}')
 plt.xlabel('Steps')
 plt.ylabel('job_openings')
-plt.legend()
+plt.title('job_openings by Firms')
+plt.legend(loc='center left', bbox_to_anchor=(1, 0.5))
+plt.savefig(dirname + f'job_openings_history.png', bbox_inches='tight')
+plt.close()
 
-# 販売履歴と利益履歴のプロット
-plt.figure(figsize=(12, 6))
-# 販売履歴のプロット
-for firm in model.schedule.agents:
-    if isinstance(firm, FirmAgent):
-        for product_type in firm.production_types:
-            plt.plot(firm.sales_volume_history[product_type], label=f'Sales of Product {product_type} by Firm {firm.unique_id}')
+
+plt.figure()
+plt.plot(model.total_consumption_histry , label=f'total_consumption')
+plt.plot(model.total_investment_histry, label=f'total_investment')
+plt.plot(model.government_spending_histry, label=f'government_spending')
 plt.xlabel('Steps')
-plt.ylabel('Sales Volume')
-plt.title('Sales History of All Products by All Firms')
-plt.legend()
+plt.ylabel('Amount of money')
+plt.title('Money trends')
+plt.legend(loc='center left', bbox_to_anchor=(1, 0.5))
+plt.savefig(dirname + f'Money_trends.png', bbox_inches='tight')
+plt.close()
 
-# 利益履歴のプロット
-plt.figure(figsize=(12, 6))
-for firm in model.schedule.agents:
-    if isinstance(firm, FirmAgent):
-        for product_type in firm.production_types:
-            plt.plot(firm.profit_history[product_type], label=f'Profit of Product {product_type} by Firm {firm.unique_id}')
+plt.figure()
+plt.plot(model.gdp_histry)
 plt.xlabel('Steps')
-plt.ylabel('Profit')
-plt.title('Profit History of All Products by All Firms')
-plt.legend()
-
-
-
-# plt.figure()
-# plt.plot(model.total_consumption_histry)
-# plt.xlabel('Steps')
-# plt.ylabel('total_consumption')
-
-# plt.figure()
-# plt.plot(model.total_investment_histry)
-# plt.xlabel('Steps')
-# plt.ylabel('total_investment')
-
-# plt.figure()
-# plt.plot(model.government_spending_histry)
-# plt.xlabel('Steps')
-# plt.ylabel('government_spending')
-
-# plt.figure()
-# plt.plot(model.gdp_histry)
-# plt.xlabel('Steps')
-# plt.ylabel('gdp')
-
-plt.show()
+plt.ylabel('gdp')
+plt.savefig(dirname + f'gdp.png')
+plt.close()
