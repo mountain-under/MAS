@@ -9,8 +9,8 @@ import pandas as pd
 from collections import defaultdict
 
 class Worker:
-    def __init__(self, production_capacity, firm):
-        self.production_capacity = production_capacity  # 生産能力
+    def __init__(self, total_product_types, firm):
+        self.production_capacity = {product_type: random.randint(1, 5) for product_type in range(total_product_types)}  # 生産能力
         self.firm = firm  # 働く先の企業エージェント
         self.employed = False  # 雇用状態
         if firm is not None:
@@ -34,7 +34,7 @@ class HouseholdAgent(Agent):
             self.num_of_retirees = 0
         self.num_of_non_workers = self.total_population - self.num_of_workers - self.num_of_retirees  # 残りはここでは子ども
         # 各労働者エージェントは生産能力と働く企業エージェントを属性として持つ
-        self.workers = [Worker(random.randint(1, 5), None) for _ in range(self.num_of_workers)]
+        self.workers = [Worker(model.total_product_types, None) for _ in range(self.num_of_workers)]
         self.income = 0 #収入
         self.disposable_income = 0 #可処分所得
         self.consumption = 0 #消費
@@ -62,7 +62,17 @@ class HouseholdAgent(Agent):
         
     # 高賃金の企業を探す：賃金が現在の企業よりも高い企業を探し、その中からランダムに1つ選ぶ
     def find_higher_paying_job(self, worker):
-        higher_paying_jobs = [firm for firm in self.model.schedule.agents if isinstance(firm, FirmAgent) and firm.fixed_wage > worker.firm.fixed_wage and firm.job_openings > 0]
+        # 現在の企業の製品タイプに対する最も高い生産能力を持つ製品タイプを見つける
+        max_capacity_product_type = max(worker.firm.production_types, key=lambda pt: worker.production_capacity.get(pt, 0))
+        max_capacity = worker.production_capacity.get(max_capacity_product_type)
+
+        # 生産能力が高い場合は同じ製品タイプの他の企業を探す
+        if max_capacity >= 3:
+            higher_paying_jobs = [firm for firm in self.model.schedule.agents if isinstance(firm, FirmAgent) and max_capacity_product_type in firm.production_types and firm.fixed_wage > worker.firm.fixed_wage and firm.job_openings > 0]
+        # 生産能力が低い場合は異なる製品タイプの企業を探す
+        else:
+            higher_paying_jobs = [firm for firm in self.model.schedule.agents if isinstance(firm, FirmAgent) and max_capacity_product_type not in firm.production_types and firm.fixed_wage > worker.firm.fixed_wage and firm.job_openings > 0]
+
         if higher_paying_jobs:
             return random.choice(higher_paying_jobs)
         else:
@@ -76,20 +86,23 @@ class HouseholdAgent(Agent):
             return None
 
     def should_consider_job_change(self, worker):
-        # 自身の生産能力が3以上であれば、20%の確率で転職を考慮
-        if worker.production_capacity == 5 and random.random() <= 0.2:
-            return True
-        if worker.production_capacity == 4 and random.random() <= 0.1:
-            return True
-        if worker.production_capacity == 3 and random.random() <= 0.05:
-            return True
-        
-        else:
-            return False
+        if worker.firm:
+            # 現在勤めている企業の製品タイプに対する最も高い生産能力を見つける
+            max_capacity = max(worker.production_capacity.get(pt, 0) for pt in worker.firm.production_types)
+            # 生産能力に基づいて転職を考慮
+            if max_capacity >= 3:
+                # 生産能力が3以上の場合、同じ製品タイプの他の企業に転職を考慮
+                if random.random() <= 0.2 + 0.1 * (max_capacity - 3):
+                    return True
+            else:
+                # 生産能力が2以下の場合、異なる製品タイプの企業に転職を考慮
+                if random.random() <= 0.2 - 0.1 * max_capacity:
+                    return True
+        return False
 
     def should_seek_job(self):
         # 80%の確率で就職を考慮
-        if random.random() <= 0.8 and (self.savings / self.total_population) < 200:
+        if random.random() <= 0.6 and (self.savings / self.total_population) < 200:
             return True
         else:
             return False
@@ -97,14 +110,13 @@ class HouseholdAgent(Agent):
     def consider_job_change(self):
         # 雇用されている労働者が転職を考慮する
         for worker in self.workers:
-            if worker.employed:  # 労働者が現在雇用されている場合
-                if self.should_consider_job_change(worker):
-                    new_firm = self.find_higher_paying_job(worker)
-                    if new_firm is not None and new_firm != worker.firm:
-                        worker.firm.fire(worker)  # 以前の雇用者から離職
-                        new_firm.hire(worker)  # ここで労働者を新しい企業に追加
-                        new_firm.job_openings -= 1
-                        print("転職しました")
+            if worker.employed and self.should_consider_job_change(worker):
+                new_firm = self.find_higher_paying_job(worker)
+                if new_firm is not None and new_firm != worker.firm:
+                    worker.firm.fire(worker)  # 以前の雇用者から離職
+                    new_firm.hire(worker)  # ここで労働者を新しい企業に追加
+                    new_firm.job_openings -= 1
+                    print("転職しました")
 
             # 失業している労働者が仕事を探す
             else:
@@ -240,7 +252,7 @@ class FirmAgent(Agent):
         self.deficit_period = 0  # 連続赤字期間
         self.hire_workers = []  # 雇用中の労働者リスト
         self.debt = 0 #借金
-        self.firm_capacity = 0 #会社の生産能力
+        self.firm_capacity = {product_type: 0 for product_type in self.production_types} #会社の生産能力
         self.job_openings = random.randint(10, 30)  # 求人公開数
         self.surplus_period = 0 #連続黒字期間
         self.debt_period = 0 #借金期間
@@ -278,7 +290,9 @@ class FirmAgent(Agent):
 
     def calculate_total_capacity(self):
         """総生産能力を計算する"""
-        self.firm_capacity = sum(worker.production_capacity for worker in self.hire_workers )
+        for product_type in self.production_types:
+            # 各製品タイプに対する生産能力の合計を計算
+            self.firm_capacity[product_type] = sum(worker.production_capacity[product_type] for worker in self.hire_workers if product_type in worker.production_capacity)
 
     def calculate_production_target(self):
         """ 生産目標量の計算 """
@@ -309,7 +323,7 @@ class FirmAgent(Agent):
         for product_type in self.production_types:
             self.production_limit[product_type] = self.technical_skill[product_type] * \
                 (self.number_of_facilities[product_type] ** self.distribution_ratio) * \
-                (self.firm_capacity ** (1 - self.distribution_ratio))
+                (self.firm_capacity[product_type] ** (1 - self.distribution_ratio))
     
     def determine_production_quantity(self):
         """ 生産量の決定 """
@@ -322,45 +336,12 @@ class FirmAgent(Agent):
                     self.production_quantity[product_type] = self.production_limit[product_type]/5
 
 
-    # def determine_pricing(self):
-    #     """ 価格の決定 """
-    #     for product_type in self.production_types:
-    #         if self.profit_history[product_type] and self.profit_history[product_type][-1] < 0:
-    #             self.prices[product_type]*1.2
-    #         elif self.inventory[product_type] > 0:  # 分母がゼロではないことを確認
-    #             # # 在庫量と生産量の比率に基づいて価格を決定する
-    #             # inventory_ratio = self.inventory[product_type] / self.production_limit[product_type]
-                
-    #             # if inventory_ratio < 0.2:
-    #             #     self.prices[product_type] *= 1.02  # 在庫比率が20%未満の場合、価格を2%引き上げる
-    #             # elif inventory_ratio > 0.8:
-    #             #     self.prices[product_type] *= 0.98  # 在庫比率が80%以上の場合、価格を2%引き下げる
-    #             sales_to_inventory_ratio = self.sales_quantity[product_type] / self.inventory[product_type] 
-    #             # 在庫が売上の2倍以上の場合、価格を5%引き下げる
-    #             if sales_to_inventory_ratio < 0.5:
-    #                 self.prices[product_type] *= 0.95
-
-    #             # 在庫が売上の半分以下の場合、価格を5%引き上げる
-    #             elif sales_to_inventory_ratio > 2:
-    #                 self.prices[product_type] *= 1.05
-    #         else:
-    #             # 分母がゼロの場合の処理
-    #             self.prices[product_type] *= 1.1
-    #             self.production_quantity[product_type] = self.production_limit[product_type]
-
-    #         # 価格が製品の総コストを下回らないように調整
-    #         if self.prices[product_type] < self.product_cost[product_type]:
-    #             self.prices[product_type] = self.product_cost[product_type]
-    
+  
     def determine_pricing(self):
         """ 価格の決定 """
         sales_gdp_history_length = len(model.gdp_history)
         
         for product_type in self.production_types:
-            # sales_profit_history_length = len(self.profit_history[product_type])
-            # if sales_profit_history_length > 0:
-            #     periods_to_consider = min(self.ti, sales_profit_history_length)
-            #     if sum(self.profit_history[product_type][-periods_to_consider:])/periods_to_consider  < 0: 
             if sales_gdp_history_length > 11:
                 periods_to_consider = min(self.ti+12, sales_gdp_history_length)  
                 if sum(model.gdp_history[-periods_to_consider:-12])/periods_to_consider  < model.gdp_history[-11]:
@@ -384,16 +365,7 @@ class FirmAgent(Agent):
                 self.investment_flag[product_type] -= 1  # 生産目標が在庫を下回った場合、投資フラグを減らす
                 if self.investment_flag[product_type] < 0:
                     self.investment_flag[product_type] = 0
-    # def update_investment_flag(self):
-    #     """ 投資フラグの更新 """
-    #     for product_type in self.production_types:
-    #         if self.profit_history[product_type]:
-    #             if self.profit_history[product_type][-1] > 0:
-    #                 self.investment_flag[product_type] += 1  # 生産目標が生産上限を超えた場合、投資フラグを増やす
-    #             elif self.profit_history[product_type][-1] < 0:
-    #                 self.investment_flag[product_type] -= 1  # 生産目標が在庫を下回った場合、投資フラグを減らす
-    #                 if self.investment_flag[product_type] < 0:
-    #                     self.investment_flag[product_type] = 0
+ 
 
     def produce(self):
         """ 製品の生産と在庫の更新 """
@@ -445,20 +417,22 @@ class FirmAgent(Agent):
     def calculate_wages(self):
         """ 賃金の計算 """
         self.total_fixed_wage = sum([self.fixed_wage for _ in self.hire_workers])  
-        self.total_bonus_base = 0     
+        self.total_bonus_base = 0 
+
+        # 企業全体の製品タイプごとの生産能力の総合計を計算
+        self.firm_capacity = {pt: sum(worker.production_capacity.get(pt, 0) for worker in self.hire_workers) for pt in self.production_types}
+
         # self.total_profit が空でないか確認
-        if  self.total_profit:
-            if self.total_profit[-1] > 0:
-                for hire_worker in self.hire_workers:
-                    # ボーナスの計算               
-                    bonus = (self.total_profit[-1] * self.bonus_rate) * (hire_worker.production_capacity / self.firm_capacity)
-                    self.total_bonus_base += bonus
-                    hire_worker.wage = self.fixed_wage + bonus
+        if self.total_profit and self.total_profit[-1] > 0:
+            for worker in self.hire_workers:
+                # 各労働者の製品タイプごとの生産能力に基づいてボーナスを計算
+                worker_bonus = sum((self.total_profit[-1] * self.bonus_rate) * (worker.production_capacity.get(pt, 0) / self.firm_capacity[pt]) for pt in self.production_types if self.firm_capacity[pt] > 0)
+                self.total_bonus_base += worker_bonus
+                worker.wage = self.fixed_wage + worker_bonus
         else:
             # self.total_profit が空の場合の処理
-            # 例: ボーナスなしで賃金を計算
-            for hire_worker in self.hire_workers:
-                hire_worker.wage = self.fixed_wage 
+            for worker in self.hire_workers:
+                worker.wage = self.fixed_wage
         
         
         
@@ -531,7 +505,10 @@ class FirmAgent(Agent):
          """労働者を解雇する"""
          while self.job_openings < 0 and self.hire_workers:
          # 解雇: ここでは生産能力が最も低い労働者を解雇すると仮定します
-             worker_to_fire = min(self.hire_workers, key=lambda worker: worker.production_capacity)
+             worker_to_fire = min(
+            self.hire_workers, 
+            key=lambda worker: sum(worker.production_capacity.get(pt, 0) for pt in self.production_types) / len(self.production_types)
+        )
              self.fire(worker_to_fire)
              self.job_openings += 1
              
@@ -725,19 +702,6 @@ class BankAgent(Agent):
 
         
 
-# # class EquipmentMakerAgent(Agent):
-#     """ 設備メーカーエージェント """
-#     def __init__(self, unique_id, model):
-#         super().__init__(unique_id, model)
-#         self.production = 0
-
-#     def step(self):
-#         self.produce_equipment()
-
-#     def produce_equipment(self):
-#         # 設備生産のロジック
-#         pass
-
 # モデルクラスの例
 class EconomicModel(Model):
     def __init__(self, num_households, num_firms):
@@ -813,23 +777,49 @@ class EconomicModel(Model):
         average_income = sum(household.income for household in self.schedule.agents if isinstance(household, HouseholdAgent))/self.num_households
         self.average_income_history.append(average_income)
         self.average_savings_history.append(average_savings)
-        # 生産能力ごとの労働者数と雇用されている労働者の数を集計
-        worker_count_by_capacity = defaultdict(lambda: {'total': 0, 'employed': 0})
+        # # 生産能力ごとの労働者数と雇用されている労働者の数を集計
+        # worker_count_by_avg_capacity = defaultdict(lambda: {'total': 0, 'employed': 0})
+        # for agent in self.schedule.agents:
+        #     if isinstance(agent, HouseholdAgent):
+        #         for worker in agent.workers:
+        #             avg_capacity = sum(worker.production_capacity.values()) / len(worker.production_capacity)
+        #             worker_count_by_avg_capacity[avg_capacity]['total'] += 1
+        #             if worker.employed:
+        #                 worker_count_by_avg_capacity[avg_capacity]['employed'] += 1
+
+        # # 生産能力ごとの雇用率を計算して記録
+        # for capacity, counts in worker_count_by_avg_capacity.items():
+        #     if counts['total'] > 0:
+        #         employment_rate = counts['employed'] / counts['total']
+        #     else:
+        #         employment_rate = 0
+        #     self.employment_rate_history_by_capacity[capacity].append(employment_rate)
+        # 生産能力範囲ごとの労働者数と雇用されている労働者の数を集計
+        worker_count_by_capacity_range = {
+            "low": {'total': 0, 'employed': 0},
+            "medium": {'total': 0, 'employed': 0},
+            "high": {'total': 0, 'employed': 0}
+        }
         for agent in self.schedule.agents:
             if isinstance(agent, HouseholdAgent):
                 for worker in agent.workers:
-                    capacity = worker.production_capacity
-                    worker_count_by_capacity[capacity]['total'] += 1
-                    if worker.employed:
-                        worker_count_by_capacity[capacity]['employed'] += 1
-
-        # 生産能力ごとの雇用率を計算して記録
-        for capacity, counts in worker_count_by_capacity.items():
+                    for product_type, capacity in worker.production_capacity.items():
+                        if capacity <= 2:
+                            range_key = "low"
+                        elif capacity == 3:
+                            range_key = "medium"
+                        else:
+                            range_key = "high"
+                        worker_count_by_capacity_range[range_key]['total'] += 1
+                        if worker.employed and worker.firm and product_type in worker.firm.production_types:
+                            worker_count_by_capacity_range[range_key]['employed'] += 1
+        # 生産能力範囲ごとの雇用率を計算して記録
+        for capacity_range, counts in worker_count_by_capacity_range.items():
             if counts['total'] > 0:
                 employment_rate = counts['employed'] / counts['total']
             else:
                 employment_rate = 0
-            self.employment_rate_history_by_capacity[capacity].append(employment_rate)
+            self.employment_rate_history_by_capacity[capacity_range].append(employment_rate)
         self.num_steps = i
         
 
@@ -855,7 +845,7 @@ num_firms_per_plot = 5
 num_plots = np.ceil(len(firm_agents) / num_firms_per_plot)
 average_plots = np.ceil(model.total_product_types /5)
 import os
-dirname = "dir049/"
+dirname = "capa/dir002/"
 os.makedirs(dirname, exist_ok=True)
 
 # 各製品タイプを生産している企業の数を数える
@@ -867,6 +857,9 @@ for firm in model.schedule.agents:
 # 各商品タイプごとの販売額と価格の合計を保持するための辞書
 total_sales_per_product_type = defaultdict(lambda: np.zeros(num_steps))
 total_prices_per_product_type = defaultdict(lambda: np.zeros(num_steps))
+# 各商品タイプごとの中央値を計算
+median_sales_per_product_type = defaultdict(list)
+median_prices_per_product_type = defaultdict(list)
 
 # 企業のリストからデータを取得し、ステップごとの合計を計算
 for firm in model.schedule.agents:
@@ -877,6 +870,18 @@ for firm in model.schedule.agents:
                 if step < len(firm.sales_history[product_type]):
                     total_sales_per_product_type[product_type][step] += firm.sales_history[product_type][step]
                     total_prices_per_product_type[product_type][step] += firm.prices_history[product_type][step]
+
+# ステップごとに中央値を計算
+for product_type in total_sales_per_product_type.keys():
+    for step in range(num_steps):
+        sales_values = [firm.sales_history[product_type][step] for firm in model.schedule.agents if isinstance(firm, FirmAgent) and product_type in firm.sales_history and step < len(firm.sales_history[product_type])]
+        price_values = [firm.prices_history[product_type][step] for firm in model.schedule.agents if isinstance(firm, FirmAgent) and product_type in firm.prices_history and step < len(firm.prices_history[product_type])]
+                    
+        median_sales = np.median(sales_values) if sales_values else 0
+        median_prices = np.median(price_values) if price_values else 0
+
+        median_sales_per_product_type[product_type].append(median_sales)
+        median_prices_per_product_type[product_type].append(median_prices)                    
 
 # ステップごとに各商品タイプの平均販売額と価格を計算
 average_sales_per_product_type = defaultdict(list)
@@ -902,24 +907,26 @@ grouped_product_types = [product_types[i:i + 5] for i in range(0, len(product_ty
 for group_index, group in enumerate(grouped_product_types):
     plt.figure(figsize=(12, 6))
     for product_type in group:
-        plt.plot(sorted_average_sales[product_type], label=f'Product Type {product_type}')
+        plt.plot(sorted_average_sales[product_type], label=f'Avg Sales - Product Type {product_type}')
+        plt.plot(median_sales_per_product_type[product_type], label=f'Median Sales - Product Type {product_type}', linestyle='--')
     
     plt.xlabel('Steps')
-    plt.ylabel('Average Sales')
-    plt.title(f'Average Sales Product Type {group_index*5+1} to {(group_index+1)*5 +1}')
+    plt.ylabel('Sales')
+    plt.title(f'Average and Median Sales Product Type {group_index*5+1} to {(group_index+1)*5 +1}')
     plt.legend(loc='center left', bbox_to_anchor=(1, 0.5))
-    plt.savefig(dirname + f'Average_Sales_Product_Type_{group_index*5+1}_to_{(group_index+1)*5}.png', bbox_inches='tight')
+    plt.savefig(dirname + f'Sales_Product_Type_{group_index*5+1}_to_{(group_index+1)*5}.png', bbox_inches='tight')
     plt.close()
 
     plt.figure(figsize=(12, 6))
     for product_type in group:
-        plt.plot(sorted_average_prices[product_type], label=f'Product Type {product_type}')
+        plt.plot(sorted_average_prices[product_type], label=f'Avg Prices - Product Type {product_type}')
+        plt.plot(median_prices_per_product_type[product_type], label=f'Median Prices - Product Type {product_type}', linestyle='--')
     
     plt.xlabel('Steps')
-    plt.ylabel('Average prices')
-    plt.title(f'Average prices Product Type {group_index*5+1} to {(group_index+1)*5}')
+    plt.ylabel('Prices')
+    plt.title(f'Average and Median Prices Product Type {group_index*5+1} to {(group_index+1)*5}')
     plt.legend(loc='center left', bbox_to_anchor=(1, 0.5))
-    plt.savefig(dirname + f'Average_prices_Product_Type_{group_index*5+1}_to_{(group_index+1)*5}.png', bbox_inches='tight')
+    plt.savefig(dirname + f'Prices_Product_Type_{group_index*5+1}_to_{(group_index+1)*5}.png', bbox_inches='tight')
     plt.close()
 
 # 売上履歴
