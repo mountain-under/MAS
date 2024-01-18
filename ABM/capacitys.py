@@ -8,7 +8,7 @@ import matplotlib.pyplot as plt
 import pandas as pd
 from collections import defaultdict
 import os
-dirname = "capa/dir013/"
+dirname = "capa/dir017/"
 os.makedirs(dirname, exist_ok=True)
 class Worker:
     def __init__(self, total_product_types, firm):
@@ -172,6 +172,7 @@ class HouseholdAgent(Agent):
         self.consumption = 0
         
     def decide_purchases(self):
+        count = 0
         available_funds = self.consumption_budget
         #random.shuffle(self.product_types)
         while available_funds > 0:
@@ -216,10 +217,11 @@ class HouseholdAgent(Agent):
                     chosen_firm.receive_payment(price ,1, product_type)
                     self.consumption +=price
                     made_purchase = True  # 購入が行われたのでフラグを更新
+                    count+=1
                 
             if not made_purchase:
                 break  # このループで購入がなかった場合はループを抜ける
-        #print(available_funds)
+        #print(f'購入回数+{count}')
 
 
 
@@ -255,7 +257,7 @@ class FirmAgent(Agent):
         self.total_profit = []
         self.investment_cost = 20000  # 資本投資に必要な金額
         self.investment_amount = 0
-        self.investment_threshold = 10  # 投資決定のしきい値
+        self.investment_threshold = 20  # 投資決定のしきい値
         self.investment_flag = {product_type: 0 for product_type in self.production_types}  # 投資フラグ変数
         self.investment_flag_history = {product_type: [] for product_type in self.production_types}
         self.firm_funds = 100000  # 企業の自己資金
@@ -270,7 +272,7 @@ class FirmAgent(Agent):
         self.hire_workers = []  # 雇用中の労働者リスト
         self.debt = 0 #借金
         self.firm_capacity = {product_type: 0 for product_type in self.production_types} #会社の生産能力
-        self.job_openings = random.randint(10, 30)  # 求人公開数
+        self.job_openings = random.randint(10, 20)  # 求人公開数
         self.surplus_period = 0 #連続黒字期間
         self.debt_period = 0 #借金期間
         self.inventory_ratio = 0
@@ -305,6 +307,7 @@ class FirmAgent(Agent):
         self.update_fixed_wage_workers()
         self.hire_or_fire()
         self.borrowing_decision()
+        self.repay_loans()
         
 
     def calculate_total_capacity(self):
@@ -331,7 +334,7 @@ class FirmAgent(Agent):
             
 
             # 生産目標量を計算
-            self.production_target[product_type] = self.average_sales_quantity[product_type] + safety_stock - (self.inventory[product_type]/2)
+            self.production_target[product_type] = self.average_sales_quantity[product_type] + safety_stock - (self.inventory[product_type])
             if  self.production_target[product_type] < 0:
                 self.production_target[product_type] = 0
 
@@ -351,8 +354,8 @@ class FirmAgent(Agent):
                 self.production_quantity[product_type] = self.production_limit[product_type]
             else:
                 self.production_quantity[product_type] = self.production_target[product_type]
-                if self.production_quantity[product_type] ==0:
-                    self.production_quantity[product_type] = self.production_limit[product_type]/5
+                # if self.production_quantity[product_type] ==0:
+                #     self.production_quantity[product_type] = self.production_limit[product_type]/5
 
 
   
@@ -505,12 +508,12 @@ class FirmAgent(Agent):
 
     def update_fixed_wage_workers(self):
         """ 固定給と労働者の人数の更新 """
-        if  self.surplus_period != 0 and self.surplus_period % 3 == 0:           
+        if  self.surplus_period != 0 and self.surplus_period % 6 == 0:           
             new_employee_count = int(len(self.hire_workers) * 1.1 )
             self.job_openings = new_employee_count - len(self.hire_workers)
-            if self.surplus_period % 9 == 0:
-                self.fixed_wage = self.fixed_wage * 1.2
-        elif self.debt_period != 0 and self.deficit_period % 9 == 0:
+            if self.surplus_period % 12 == 0:
+                self.fixed_wage = self.fixed_wage * 1.1
+        elif self.deficit_period != 0 and self.deficit_period % 9 == 0:
             self.fixed_wage = self.fixed_wage * 0.95
             if self.deficit_period % 18 == 0:
                 new_employee_count = int(len(self.hire_workers) * 0.9 )
@@ -544,7 +547,7 @@ class FirmAgent(Agent):
         for loan in self.loans:
             if loan['remaining_payments'] > 0:
                 monthly_payment = (loan['amount'] / loan['remaining_payments']) 
-                self.firm_funds -= self.bank.loan_repayment(monthly_payment)
+                self.firm_funds -= self.model.bank.loan_repayment(monthly_payment)
                 loan['remaining_payments'] -= 1
                 if loan['remaining_payments'] == 0:
                     self.loans.remove(loan)    
@@ -581,12 +584,12 @@ class FirmAgent(Agent):
 
 class GovernmentAgent(Agent):
     """ 政府エージェント """
-    def __init__(self, unique_id, model):
+    def __init__(self, unique_id, model,BI):
         super().__init__(unique_id, model)
         self.pension_amount =150 # 年金
         self.child_allowance_amount = 20  # 児童手当
         self.unemployment_allowance_amount =100 # 失業手当
-        self.BI_amount = 0 # BI
+        self.BI_amount = BI # BI
         self.government_income = 0 #政府の税金での収入．
         self.government_spending = 0 #政府の税金での支出．
         self.total_amount = 0
@@ -642,17 +645,23 @@ class GovernmentAgent(Agent):
 
     
     def purchase_goods(self):
-        """ 商品の購入 """        
-        random.shuffle(self.firms)  # 企業のリストをシャッフル
-        for firm in self.firms:            
-            for product_type in firm.production_types:
-                if firm.inventory[product_type] > 0 and self.budget >= firm.prices[product_type]:
-                    amount = min(firm.inventory[product_type], self.budget // firm.prices[product_type])
-                    purchase_cost = amount * firm.prices[product_type]
-                    firm.receive_payment(purchase_cost, amount, product_type)
-                    self.budget -= purchase_cost
-                    self.government_spending += purchase_cost
-                    self.total_amount -= purchase_cost
+        """ 商品の購入 """               
+        while self.budget > 0:
+            made_purchase = False
+            random.shuffle(self.firms)  # 企業のリストをシャッフル
+            for firm in self.firms:
+                for product_type in firm.production_types:
+                    if firm.inventory[product_type] > 0 and self.budget >= firm.prices[product_type]:
+                        amount = min(firm.inventory[product_type], self.budget // firm.prices[product_type])
+                        purchase_cost = amount * firm.prices[product_type]
+                        firm.receive_payment(purchase_cost, amount, product_type)
+                        self.budget -= purchase_cost
+                        self.government_spending += purchase_cost
+                        self.total_amount -= purchase_cost
+                        made_purchase = True
+
+            if not made_purchase:
+                break  # 予算内で購入可能な商品がない場合、ループを終了
 
 
     def settlement_of_accounts(self):
@@ -726,7 +735,7 @@ class BankAgent(Agent):
 
 # モデルクラスの例
 class EconomicModel(Model):
-    def __init__(self, num_households, num_firms):
+    def __init__(self, num_households, num_firms , BI_change):
         self.schedule = RandomActivation(self)
         self.num_households = num_households  
         self.num_firms = num_firms 
@@ -739,8 +748,11 @@ class EconomicModel(Model):
         self.job_openings_history = []
         self.inventory_ratio_history = []
         self.employment_rate_history_by_capacity = defaultdict(list)
+        self.unemployment_rate_history_by_capacity = []
         self.average_income_history = []
         self.average_savings_history = []
+        self.median_income_history = []
+        self.median_savings_history = []
         self.firm_funds_history = []
         self.government_funds_history = []
         self.bank_funds_history = []
@@ -754,7 +766,7 @@ class EconomicModel(Model):
             firm = FirmAgent(self.num_households+i, self)
             self.schedule.add(firm)
 
-        self.government = GovernmentAgent(self.num_households + self.num_firms, self)
+        self.government = GovernmentAgent(self.num_households + self.num_firms, self,BI_change )
         self.bank = BankAgent(self.num_households + self.num_firms + 1, self)
         self.schedule.add(self.government)
         self.schedule.add(self.bank)
@@ -807,9 +819,13 @@ class EconomicModel(Model):
         self.worker_count_history.append(current_worker_counts)
         self.inventory_ratio_history.append(current_inventory_ratio)
         average_savings = sum(household.savings for household in self.schedule.agents if isinstance(household, HouseholdAgent))/self.num_households
+        median_savings = np.median([household.savings for household in self.schedule.agents if isinstance(household, HouseholdAgent)])
         average_income = sum(household.income for household in self.schedule.agents if isinstance(household, HouseholdAgent))/self.num_households
+        median_income = np.median([household.income for household in self.schedule.agents if isinstance(household, HouseholdAgent)])
         self.average_income_history.append(average_income)
         self.average_savings_history.append(average_savings)
+        self.median_income_history.append(median_income)
+        self.median_savings_history.append(median_savings)
         current_firm_funds = {firm.unique_id: firm.firm_funds for firm in self.schedule.agents if isinstance(firm, FirmAgent)}
         self.firm_funds_history.append(current_firm_funds)
         
@@ -840,20 +856,38 @@ class EconomicModel(Model):
             self.employment_rate_history_by_capacity[capacity_range].append(employment_rate)
         self.num_steps = i
         self.handle_personnel_changes()
+
+        total_workers = 0
+        unemployed_workers = 0
+
+        for agent in self.schedule.agents:
+            if isinstance(agent, HouseholdAgent):
+                for worker in agent.workers:
+                    total_workers += 1
+                    if not worker.employed:
+                        unemployed_workers += 1
+
+        # 雇用されていない労働者の割合を計算
+        if total_workers > 0:
+            unemployment_rate = unemployed_workers / total_workers
+        else:
+            unemployment_rate = 0
+        self.unemployment_rate_history_by_capacity.append(unemployment_rate)
         
 
 
 
 
 # メインの実行部分
-num_households = 450
+num_households = 600
 num_firms = 30
 num_steps = 100
 num_simulations = 1  # シミュレーションの回数
+BI_change = 0
 
 for sim in range(num_simulations):
     # モデルを初期化し、シミュレーションを実行
-    model = EconomicModel(num_households, num_firms)  
+    model = EconomicModel(num_households, num_firms, BI_change)  
     for i in range(num_steps):  
         model.step(i)
         print(i)
@@ -1060,6 +1094,7 @@ for i in range(int(num_plots)):
     plt.legend(loc='center left', bbox_to_anchor=(1, 0.5))
     plt.savefig(dirname + f'price_history_firms_{i*num_firms_per_plot+1}_to_{(i+1)*num_firms_per_plot}.png', bbox_inches='tight')
     plt.close()
+    
 
 #企業ごとの労働者の推移
 plt.figure()
@@ -1076,9 +1111,11 @@ plt.close()
 #雇用率の履歴
 plt.figure()
 for capacity, rates in model.employment_rate_history_by_capacity.items():
-    plt.plot(rates, label=f'Capacity {capacity}')
+    plt.plot(rates, label=f'Employment Rate {capacity}')
+
+plt.plot(model.unemployment_rate_history_by_capacity, label=f'Unemployment Rate ', linestyle='--')
 plt.xlabel('Steps')
-plt.ylabel('Employment Rate')
+plt.ylabel('Rate')
 plt.title('Employment Rate by Production Capacity')
 plt.legend(loc='center left', bbox_to_anchor=(1, 0.5))
 plt.savefig(dirname + f'employment_rate_history.png', bbox_inches='tight')
@@ -1095,16 +1132,16 @@ plt.legend(loc='center left', bbox_to_anchor=(1, 0.5))
 plt.savefig(dirname + f'job_openings_history.png', bbox_inches='tight')
 plt.close()
 
-plt.figure()
-for firm_id in range(num_firms):
-    inventory_ratios = [step[num_households+firm_id] for step in model.inventory_ratio_history]
-    plt.plot(inventory_ratios, label=f'Firm {firm_id + 1}')
-plt.xlabel('Steps')
-plt.ylabel('inventory_ratio')
-plt.title('inventory_ratio by Firms')
-plt.legend(loc='center left', bbox_to_anchor=(1, 0.5))
-plt.savefig(dirname + f'inventory_ratio_history.png', bbox_inches='tight')
-plt.close()
+# plt.figure()
+# for firm_id in range(num_firms):
+#     total_profits = [step[num_households+firm_id] for step in model.total_profit_history]
+#     plt.plot(total_profits, label=f'Firm {firm_id + 1}')
+# plt.xlabel('Steps')
+# plt.ylabel('total_profit')
+# plt.title('total_profit by Firms')
+# plt.legend(loc='center left', bbox_to_anchor=(1, 0.5))
+# plt.savefig(dirname + f'total_profit_history.png', bbox_inches='tight')
+# plt.close()
 
 plt.figure()
 for firm_id in range(num_firms):
@@ -1119,20 +1156,22 @@ plt.close()
 
 plt.figure()
 plt.plot(model.average_income_history , label=f'average_income')
+plt.plot(model.median_income_history , label=f'median_income')
 plt.xlabel('Steps')
-plt.ylabel('Average_income')
-plt.title('Average_income')
+plt.ylabel('Income')
+plt.title('Income')
 plt.legend(loc='center left', bbox_to_anchor=(1, 0.5))
-plt.savefig(dirname + f'Average_income.png', bbox_inches='tight')
+plt.savefig(dirname + f'Income.png', bbox_inches='tight')
 plt.close()
 
 plt.figure()
 plt.plot(model.average_savings_history , label=f'average_savings')
+plt.plot(model.median_savings_history , label=f'median_savings')
 plt.xlabel('Steps')
-plt.ylabel('Average_savings')
-plt.title('Average_savings')
+plt.ylabel('Savings')
+plt.title('Savings')
 plt.legend(loc='center left', bbox_to_anchor=(1, 0.5))
-plt.savefig(dirname + f'Average_savings.png', bbox_inches='tight')
+plt.savefig(dirname + f'Savings.png', bbox_inches='tight')
 plt.close()
 
 plt.figure()
